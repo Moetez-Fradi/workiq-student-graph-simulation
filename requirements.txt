@@ -1,0 +1,6 @@
+# This simulator intentionally has no third-party runtime dependencies.
+# It runs on the Python standard library (http.server, json, and unittest).
+#
+# Optional: create an isolated environment before running it:
+#   python3 -m venv .venv
+#   . .venv/bin/activate
