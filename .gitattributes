@@ -1,0 +1,3 @@
+# Keep LF everywhere (Makefile recipes, .env sourcing, Dockerfile and SQL run
+# under Linux shells), even on Windows checkouts with core.autocrlf=true.
+* text=auto eol=lf
