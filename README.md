@@ -1,29 +1,23 @@
 # NeoMind Work IQ + Student Graph simulator
 
-`workiq-student-graph-sim` is a deterministic local double for the read-only subset of Work IQ MCP and Microsoft Graph Education used by the NeoMind proof of concept. It lets an eventual `WorkIQAdapter` exercise OAuth authorization-code-shaped navigation, bearer-token handling, MCP path discovery and schema inspection, and Graph-shaped student, school, class, assignment, file, and calendar data.
+`workiq-student-graph-sim` is a deterministic local double for the three Microsoft services the NeoMind proof of concept talks to: the **Work IQ MCP server**, **Microsoft Graph v1.0** (education, profile, calendar and drive reads), and the **Microsoft Entra ID v2.0** OAuth endpoints that issue tokens for both. It lets an eventual `WorkIQAdapter` exercise the real wire contracts — Entra authorization-code + PKCE, per-resource bearer tokens, MCP Streamable HTTP, Work IQ's tool surface and default tenant policy, and Graph-shaped student, school, class, assignment, file and calendar data — with no tenant, Entra app registration, Microsoft 365 account, Copilot Credits, or real student data.
 
-It starts with no tenant, Entra app registration, Microsoft 365 account, Copilot Credits, or real student data. The fixture always represents the same demo student and class, so local development and contract tests remain repeatable.
+The fixture always represents the same demo student and class, so local development and contract tests remain repeatable.
 
-> This is not a Microsoft service, an authentication provider, or a security boundary. Never deploy it, expose it on a network, or use its fixed token outside local development.
+> This is not a Microsoft service, an authentication provider, or a security boundary. Never deploy it, expose it on a network, or use its fixed tokens outside local development.
 
 ## Prerequisites
 
-- Python 3.10 or later (the code uses modern type annotations).
-- No third-party packages. See [requirements.txt](requirements.txt) for the intentionally empty dependency policy.
-
-An isolated environment is optional:
-
-```bash
-python3 -m venv .venv
-. .venv/bin/activate
-```
+- Python 3.10 or later. No third-party packages — see [requirements.txt](requirements.txt).
+- On Windows, [uv](https://docs.astral.sh/uv/) is the easiest way to get a suitable Python (`winget install astral-sh.uv`); `uv run` below fetches one automatically.
 
 ## Start the simulator
 
-From this directory, run:
+From this directory:
 
 ```bash
-python3 server.py
+python3 server.py                                # Linux / macOS
+uv run --no-project --python 3.12 server.py      # any OS, including Windows
 ```
 
 The default base URL is `http://127.0.0.1:8787`. Confirm that it is ready:
@@ -33,129 +27,137 @@ curl -s http://127.0.0.1:8787/health
 # {"status": "ok"}
 ```
 
-Use `Ctrl+C` in the terminal running the service to stop it.
+Use `Ctrl+C` to stop it.
 
 ### Configuration
 
-The server reads these environment variables at start-up:
-
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `SIM_HOST` | `127.0.0.1` | Interface on which the HTTP server listens. Keep the loopback default for local-only use. |
-| `SIM_PORT` | `8787` | TCP port for all simulator endpoints. |
+| `SIM_HOST` | `127.0.0.1` | Interface to listen on. Keep the loopback default. |
+| `SIM_PORT` | `8787` | TCP port for every endpoint. |
+| `SIM_WORKIQ_ALLOWED_PREFIXES` | `/me,/users,/sites` | Work IQ tenant-policy path allow-list. The default is Microsoft's documented default; add `/education` to model a tenant whose admin allowed Graph Education paths. |
 
-For example:
+## Authentication (Entra ID v2.0 shape)
 
-```bash
-SIM_PORT=8788 python3 server.py
-```
-
-When changing either setting, use the resulting base URL in every client configuration and authorization request.
-
-## Local authentication flow
-
-The server mimics only the outline of delegated authorization. It accepts one fixed authorization code and returns one fixed access token:
+Entra issues an access token for **one resource per request**, so Graph and Work IQ need separate tokens — the simulator enforces this just like the real services (a Graph token on `/mcp`, or a Work IQ token on `/v1.0`, is rejected with 401).
 
 | Item | Value |
 | --- | --- |
+| Tenant ID | `8f3e2d1c-4b5a-4c6d-9e7f-0a1b2c3d4e5f` (also accepts `common`, `organizations`) |
 | Authorization code | `sim-auth-code-student-001` |
-| Access token | `sim-access-token-student-001` |
-| Seeded user ID | `student-001` |
+| Graph access token (scopes `User.Read EduRoster.ReadBasic EduAssignments.ReadBasic Calendars.Read Files.Read`) | `sim-graph-token-student-001` |
+| Work IQ access token (scope `api://workiq.svc.cloud.microsoft/WorkIQAgent.Ask`) | `sim-workiq-token-student-001` |
+| Refresh token (issued with `offline_access`) | `sim-refresh-token-student-001` |
+| Seeded user (`oid`) | `3f6c1a2b-9d4e-4c8f-a1b2-7e5d9c0f1a23` — `amina.demo@neomind.test` |
 
-1. Navigate to an authorization URL with a redirect URI owned by your local client:
+1. Send the user to the authorize endpoint (PKCE `code_challenge` optional but verified when present; `response_mode` `query`, `fragment` or `form_post`):
 
    ```text
-   http://127.0.0.1:8787/authorize?response_type=code&client_id=neomind-demo&redirect_uri=http://127.0.0.1:3000/callback&state=demo
+   http://127.0.0.1:8787/common/oauth2/v2.0/authorize?client_id=neomind-demo&response_type=code&redirect_uri=http://127.0.0.1:3000/callback&scope=api://workiq.svc.cloud.microsoft/WorkIQAgent.Ask%20offline_access&state=demo
    ```
 
-   The simulator redirects to that URI with `code` and the supplied `state`.
+   The simulator redirects to `redirect_uri` with `code` and `state` (or with `error` / `error_description` carrying an `AADSTS` code, as Entra does).
 
-2. Exchange the code for the bearer token:
+2. Redeem the code. The `scope` picks the resource — Work IQ scopes (`api://workiq.svc.cloud.microsoft/...`) yield the Work IQ token; Graph scopes (`User.Read`, `https://graph.microsoft.com/.default`, …) yield the Graph token; mixing both is `invalid_scope` (`AADSTS28000`):
 
    ```bash
-   curl -s -X POST http://127.0.0.1:8787/oauth/token \
-     -H 'Content-Type: application/x-www-form-urlencoded' \
-     --data 'grant_type=authorization_code&code=sim-auth-code-student-001'
+   curl -s -X POST http://127.0.0.1:8787/common/oauth2/v2.0/token \
+     -d 'grant_type=authorization_code&client_id=neomind-demo&code=sim-auth-code-student-001&redirect_uri=http://127.0.0.1:3000/callback&scope=api://workiq.svc.cloud.microsoft/WorkIQAgent.Ask'
    ```
 
-3. Include the returned token on Graph and MCP requests:
+   Then use the `refresh_token` grant to get the other resource's token, as with Entra. The code can also be redeemed directly without visiting `/authorize` (handy for curl); after an `/authorize` visit it is single-use and bound to that request's `redirect_uri` and PKCE challenge.
 
-   ```text
-   Authorization: Bearer sim-access-token-student-001
-   ```
+3. Send `Authorization: Bearer <token>` on Graph and MCP requests.
 
-The discovery document is available at `GET /.well-known/oauth-authorization-server`. Token requests with a different code, and protected requests without the exact bearer token, are rejected.
+Discovery: `GET /{tenant}/v2.0/.well-known/openid-configuration` (Entra's format) and, for MCP clients, `GET /.well-known/oauth-protected-resource/mcp` (RFC 9728), which the `WWW-Authenticate` header on a 401 from `/mcp` points to.
 
-## Interfaces and examples
+## Interfaces
 
-| Endpoint | Purpose | Authentication |
+| Endpoint | Purpose | Auth |
 | --- | --- | --- |
 | `GET /health` | Readiness probe. | No |
-| `GET /.well-known/oauth-authorization-server` | Local OAuth metadata. | No |
-| `GET /authorize` | Redirects with the fixed authorization code. | No |
-| `POST /oauth/token` | Exchanges the fixed code for the fixed token. | No |
-| `POST /mcp` | JSON-RPC MCP endpoint. | Bearer token |
-| `GET /v1.0/...` | Graph-shaped read endpoints. | Bearer token |
+| `GET /{tenant}/v2.0/.well-known/openid-configuration` | Entra OIDC metadata. | No |
+| `GET /{tenant}/oauth2/v2.0/authorize` | Authorization-code redirect. | No |
+| `POST /{tenant}/oauth2/v2.0/token` | `authorization_code` and `refresh_token` grants. | No |
+| `GET /.well-known/oauth-protected-resource/mcp` | MCP protected-resource metadata. | No |
+| `POST /mcp` | Work IQ MCP, Streamable HTTP (JSON responses). | Work IQ token |
+| `GET /v1.0/...` | Microsoft Graph v1.0 reads. | Graph token |
 
-### Microsoft Graph-shaped reads
+### Microsoft Graph reads
 
 ```bash
-curl -s http://127.0.0.1:8787/v1.0/education/users/student-001/classes \
-  -H 'Authorization: Bearer sim-access-token-student-001'
+curl -s http://127.0.0.1:8787/v1.0/education/me/classes \
+  -H 'Authorization: Bearer sim-graph-token-student-001'
 ```
 
-Supported paths are:
+Supported paths (case-insensitive, like Graph; `$select` and `$top` work everywhere):
 
-- `/me`
-- `/me/drive/root/search(q='primary_math')` and `/me/drive/root/search(q='fractions')`
-- `/me/calendarView?startdatetime=...&enddatetime=...`
-- `/education/users/student-001`
-- `/education/schools`
-- `/education/users/student-001/classes`
-- `/education/classes/primary-math-2026/members`
-- `/education/classes/primary-math-2026/assignments`
+- `/me`, `/users/{id or UPN}`
+- `/me/calendarView?startDateTime=...&endDateTime=...` (both required; filtered to the window)
+- `/me/drive/root/search(q='...')` (matches any query against the seeded notes), `/me/drive/items/{id}`, `/me/drive/items/{id}/content` (302 to a download URL)
+- `/education/me`, `/education/me/classes`, `/education/me/schools`
+- `/education/users/{id}`, `/education/users/{id}/classes`, `/education/users/{id}/schools`
+- `/education/schools`, `/education/schools/{id}`
+- `/education/classes/{id}`, `/education/classes/{id}/members`, `/education/classes/{id}/assignments`, `/education/classes/{id}/assignments/{id}`
 
-Unknown paths return a Graph-style `404` with `Request_ResourceNotFound`. `/education/schools` includes a simulator-only `neomindCurriculumId`; production code must resolve curricula through NeoMind's own catalog or enrollment source instead.
+Seeded IDs: class `b8d2e4f6-1a3c-4e5b-8d7f-9a0b1c2d3e4f`, school `c4e6a8b0-2d4f-4a6c-8e0b-1d3f5a7c9e2b`, assignment `d5f7b9c1-3e5a-4b7d-9f1c-2e4a6c8e0a3d`.
 
-### MCP JSON-RPC endpoint
+Errors use Graph's envelope (`error.code`, `error.message`, `error.innerError`): an unknown ID is `404 Request_ResourceNotFound`, an unknown path segment is `400 BadRequest`, a missing calendar window is `400 ErrorInvalidParameter`, and writes are `403 Authorization_RequestDenied` (the student only holds read scopes).
 
-Initialize the server or list its tools with a JSON-RPC request. For example, read the seeded student and their classes in one `fetch` call:
+**Mapping to NeoMind:** Graph has no curriculum field. The class's SIS-synced `course.externalId` (`primary_math`) is the realistic hook for choosing NeoMind's catalog, and the student's `student.externalId` (`demo-student-01`) matches NeoMind's fixture `learner_ref`.
+
+### Work IQ MCP endpoint
 
 ```bash
 curl -s http://127.0.0.1:8787/mcp \
-  -H 'Authorization: Bearer sim-access-token-student-001' \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"fetch","arguments":{"entityUrls":["/me","/education/users/student-001/classes"]}}}'
+  -H 'Authorization: Bearer sim-workiq-token-student-001' \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"fetch","arguments":{"entityUrls":["/me","/education/me/classes"]}}}'
 ```
 
-The read-only tools are:
+The second entry comes back as a `403` policy denial — see the default tenant policy below.
 
-| Tool | Arguments | Result |
+Protocol: JSON-RPC 2.0 over Streamable HTTP; protocol versions `2025-11-25`, `2025-06-18`, `2025-03-26` (negotiated in `initialize`); notifications get `202 Accepted`; `ping` is supported; `GET /mcp` is `405` (no server-initiated stream); foreign `Origin` headers are `403`; unknown tools are JSON-RPC error `-32602`.
+
+The tools and their arguments mirror the [Work IQ MCP tool reference](https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/work-iq/mcp/tool-reference):
+
+| Tool | Arguments | Simulator behavior |
 | --- | --- | --- |
-| `search_paths` | `filter` | Matching declared relative paths and their operations. |
-| `get_schema` | `path`, `operationType: "fetch"` | A small JSON schema for a supported path shape. |
-| `fetch` | `entityUrls` array | Ordered `{statusCode, data}` entries, one per requested path. |
-| `call_function` | `functionUrl` | The allowed parameterized calendar path only. |
+| `fetch` | `entityUrls` | `structuredContent.results[]` of `{data, statusCode}`, in request order. |
+| `fetch_blob` | `path`, `format` | `/me/drive/items/{id}/content` → `{statusCode, contentType, blobName, sizeBytes, base64Content}` in `structuredContent` only. |
+| `call_function` | `functionUrl` | `{data, statusCode}` for any supported path (e.g. `/me/calendarView?...`). |
+| `search_paths` | `filter` (prefix or regex) | `{paths: [{path, operations}]}` using Graph OpenAPI templates such as `/education/classes/{educationClass-id}/members`. Only `fetch` is listed: there are no write routes. |
+| `get_schema` | `path` or `operationIds`, `operationType`, `format` | JSON Schema 2020-12 as text content (`...CollectionResponse` for collections). `operationIds` and `typescript` output aren't simulated. |
+| `create_entity`, `update_entity`, `delete_entity`, `do_action` | as documented | Denied by default tenant policy (`isError`). |
+| `ask` | `question`, … | `isError`: Microsoft 365 Copilot isn't emulated. |
+| `list_agents` | none | The built-in Microsoft Copilot agent. |
 
-`call_function` accepts only `/me/calendarView?...`. Any missing tool, write operation, or unsupported function responds with an MCP `isError` result.
+**Default tenant policy**, as documented by Microsoft: entity tools may only touch paths under `/me/`, `/users/` and `/sites/`; `/authentication/` and `/servicePrincipals/` are blocked; `$skip`/`$skiptoken` are blocked; collection reads get `$top=25` unless specified, capped at 100; mutations are denied. **`/education/...` paths are therefore denied through Work IQ by default** — read them from Graph directly, or set `SIM_WORKIQ_ALLOWED_PREFIXES` to model a tenant that allows them. A denied `fetch` path comes back as its own `{statusCode: 403, data: {error: {code: "PolicyDenied", ...}}}` entry.
 
 ## Run the tests
 
-The test suite uses only `unittest` and does not need the server to be running:
+The suite uses only `unittest`; it starts its own server on a random port:
 
 ```bash
-python3 -m unittest -v
+python3 -m unittest -v                                   # Linux / macOS
+uv run --no-project --python 3.12 -m unittest -v         # any OS
 ```
 
-The tests cover seeded Graph responses, Graph-style unknown-resource errors, MCP multi-path fetch ordering, path discovery, and rejection of a mutation tool.
+## Conformance
+
+Sources: the Work IQ MCP [tool reference](https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/work-iq/mcp/tool-reference), [policy governance](https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/work-iq/mcp/policy-governance-mcp) and [permissions](https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/work-iq/permissions) pages; the Microsoft Graph v1.0 reference for each resource; the Microsoft identity platform v2.0 authorization-code documentation; and the MCP specification (tools, Streamable HTTP, authorization).
+
+Where Microsoft doesn't document a shape, the simulator makes an explicit, commented assumption:
+
+- The wire shape of a Work IQ policy denial (a Graph-style 403 `PolicyDenied` body per `fetch` entry, `isError` text for denied tools).
+- `id_token`s are unsigned (`alg: none`) and the JWKS is empty; real Entra tokens are RS256 JWTs, and real access tokens are JWTs rather than opaque strings.
+- Like Entra, the OIDC metadata doesn't advertise `code_challenge_methods_supported`, even though `S256` works. Some strict MCP clients refuse to proceed without it — the same friction they'd hit against Entra.
 
 ## Design boundaries
 
-The implementation deliberately favors a narrow contract surface over a broad emulation of Microsoft services:
+- Standard-library `http.server`: suitable for local contract tests, not production traffic.
+- OAuth doesn't model consent, client secrets, conditional access, token expiry, or signature validation.
+- There are no write routes. Mutation tools exist (the real server lists them) but are always denied, as by Work IQ's default policy.
+- Fixtures contain fabricated demo data only.
 
-- The HTTP server uses Python's standard-library `http.server`; it is suitable for a local adapter contract test, not production traffic.
-- OAuth does not model consent, PKCE, client authentication, refresh tokens, scopes, conditional access, tenant policy, or token validation.
-- There are no write routes or MCP mutation tools. That read-only policy is structural: unsupported capabilities do not exist.
-- Fixtures contain fabricated demo data only. Do not treat their fields or schemas as a guarantee of Microsoft Graph or Work IQ compatibility.
-
-For real integrations, use Microsoft’s current Work IQ MCP and Microsoft Graph Education documentation as the source of truth; this project is a local contract simulator only.
+For real integrations, Microsoft's current Work IQ MCP and Microsoft Graph documentation remain the source of truth.
