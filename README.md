@@ -35,7 +35,17 @@ Use `Ctrl+C` to stop it.
 | --- | --- | --- |
 | `SIM_HOST` | `127.0.0.1` | Interface to listen on. Keep the loopback default. |
 | `SIM_PORT` | `8787` | TCP port for every endpoint. |
+| `SIM_BASE_URL` | `http://{SIM_HOST}:{SIM_PORT}` | URL clients reach the simulator at. It is published in the OIDC metadata, token `iss` claims, the MCP protected-resource metadata and `WWW-Authenticate` challenges. Set it when the bind address isn't what clients use, as in Docker. |
 | `SIM_WORKIQ_ALLOWED_PREFIXES` | `/me,/users,/sites` | Work IQ tenant-policy path allow-list. The default is Microsoft's documented default; add `/education` to model a tenant whose admin allowed Graph Education paths. |
+
+### Docker
+
+```bash
+docker build -t workiq-sim .
+docker run --rm -p 127.0.0.1:8787:8787 workiq-sim
+```
+
+The image listens on `0.0.0.0:8787` inside the container, so publish it on the loopback interface only, as above. It defaults `SIM_BASE_URL` to `http://127.0.0.1:8787`. If you publish on another host port, set `SIM_BASE_URL` to match (for example `-p 127.0.0.1:9000:8787 -e SIM_BASE_URL=http://127.0.0.1:9000`). The image has a health check against `/health`. Run the tests in it with `docker run --rm workiq-sim python -m unittest -v`.
 
 ## Authentication (Entra ID v2.0 shape)
 

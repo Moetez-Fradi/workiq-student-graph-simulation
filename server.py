@@ -26,7 +26,10 @@ from urllib.parse import parse_qs, unquote, urlencode, urlparse
 
 HOST = os.environ.get("SIM_HOST", "127.0.0.1")
 PORT = int(os.environ.get("SIM_PORT", "8787"))
-BASE_URL = f"http://{HOST}:{PORT}"
+# The URL clients reach us at, published in OIDC metadata, token issuers and
+# WWW-Authenticate challenges. It differs from the bind address in a container,
+# which listens on 0.0.0.0 but is reached through a published loopback port.
+BASE_URL = os.environ.get("SIM_BASE_URL", f"http://{HOST}:{PORT}").rstrip("/")
 GRAPH_CONTEXT = "https://graph.microsoft.com/v1.0/$metadata#"
 
 # --- Identity fixtures -------------------------------------------------------

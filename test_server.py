@@ -1,6 +1,9 @@
 import base64
 import hashlib
 import json
+import os
+import subprocess
+import sys
 import threading
 import unittest
 from http.client import HTTPConnection
@@ -281,6 +284,24 @@ class HttpTests(unittest.TestCase):
         params = parse_qs(urlparse(headers["Location"]).query)
         self.assertEqual((status, params["error"], params["state"]), (302, ["unsupported_response_type"], ["s"]))
         self.assertTrue(params["error_description"][0].startswith("AADSTS700054"))
+
+
+class ConfigTests(unittest.TestCase):
+    def base_url(self, **env):
+        # BASE_URL is read at import, so check it in a fresh interpreter.
+        environ = {key: value for key, value in os.environ.items() if not key.startswith("SIM_")}
+        environ.update(env)
+        result = subprocess.run(
+            [sys.executable, "-c", "import server; print(server.BASE_URL)"],
+            cwd=os.path.dirname(os.path.abspath(__file__)), env=environ, capture_output=True, text=True, check=True,
+        )
+        return result.stdout.strip()
+
+    def test_base_url_defaults_to_the_bind_address(self):
+        self.assertEqual(self.base_url(SIM_HOST="127.0.0.1", SIM_PORT="9000"), "http://127.0.0.1:9000")
+
+    def test_base_url_override_is_published_instead_of_the_bind_address(self):
+        self.assertEqual(self.base_url(SIM_HOST="0.0.0.0", SIM_BASE_URL="http://127.0.0.1:8787/"), "http://127.0.0.1:8787")
 
 
 if __name__ == "__main__":
