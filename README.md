@@ -2,7 +2,7 @@
 
 `workiq-student-graph-sim` is a deterministic local double for the three Microsoft services the NeoMind proof of concept talks to: the **Work IQ MCP server**, **Microsoft Graph v1.0** (education, profile, calendar and drive reads), and the **Microsoft Entra ID v2.0** OAuth endpoints that issue tokens for both. It lets an eventual `WorkIQAdapter` exercise the real wire contracts — Entra authorization-code + PKCE, per-resource bearer tokens, MCP Streamable HTTP, Work IQ's tool surface and default tenant policy, and Graph-shaped student, school, class, assignment, file and calendar data — with no tenant, Entra app registration, Microsoft 365 account, Copilot Credits, or real student data.
 
-The fixture always represents the same demo student and class, so local development and contract tests remain repeatable.
+The fixture always represents the same demo school, class and three people (a student, their teacher and the school's director), so local development and contract tests remain repeatable.
 
 > This is not a Microsoft service, an authentication provider, or a security boundary. Never deploy it, expose it on a network, or use its fixed tokens outside local development.
 
@@ -36,6 +36,7 @@ Use `Ctrl+C` to stop it.
 | `SIM_HOST` | `127.0.0.1` | Interface to listen on. Keep the loopback default. |
 | `SIM_PORT` | `8787` | TCP port for every endpoint. |
 | `SIM_BASE_URL` | `http://{SIM_HOST}:{SIM_PORT}` | URL clients reach the simulator at. It is published in the OIDC metadata, token `iss` claims, the MCP protected-resource metadata and `WWW-Authenticate` challenges. Set it when the bind address isn't what clients use, as in Docker. |
+| `SIM_DEFAULT_USER` | the student's UPN | Who signs in when the authorize request has no `login_hint`: `amina.demo@neomind.test`, `demo.teacher@neomind.test` or `principal@neomind.test`. |
 | `SIM_WORKIQ_ALLOWED_PREFIXES` | `/me,/users,/sites` | Work IQ tenant-policy path allow-list. The default is Microsoft's documented default; add `/education` to model a tenant whose admin allowed Graph Education paths. |
 
 ### Docker
@@ -59,6 +60,20 @@ Entra issues an access token for **one resource per request**, so Graph and Work
 | Work IQ access token (scope `api://workiq.svc.cloud.microsoft/WorkIQAgent.Ask`) | `sim-workiq-token-student-001` |
 | Refresh token (issued with `offline_access`) | `sim-refresh-token-student-001` |
 | Seeded user (`oid`) | `3f6c1a2b-9d4e-4c8f-a1b2-7e5d9c0f1a23` — `amina.demo@neomind.test` |
+
+The values above are the student's. The teacher's and the director's follow the same pattern with `teacher` or `director` in place of `student` (for example `sim-workiq-token-teacher-001`).
+
+### Who signs in, and their role
+
+Entra signs in whoever picks their account on its page. With no page here, the authorize request's `login_hint` (a UPN, which Entra also accepts) picks the account, then `SIM_DEFAULT_USER`, then the student. An unknown account comes back as `AADSTS50034`.
+
+| Person | UPN | `oid` | `/me` `jobTitle` | `/education/me` `primaryRole` |
+| --- | --- | --- | --- | --- |
+| Amina Demo, student | `amina.demo@neomind.test` | `3f6c1a2b-9d4e-4c8f-a1b2-7e5d9c0f1a23` | `null` | `student` (with a `student` block) |
+| Demo Teacher, class teacher | `demo.teacher@neomind.test` | `7a9c1e3f-5b7d-4f9a-8c1e-3a5c7e9b1d4f` | `Class Teacher` | `teacher` (with a `teacher` block) |
+| Demo Principal, director | `principal@neomind.test` | `9e1a3c5f-7d9b-4b1d-a3f5-7c9e1b3d5f8a` | `Director` | `none` |
+
+This is how a real tenant gives a role: Graph's `primaryRole` is only ever `student`, `teacher` or `none`, and a title such as "Director" or "Head Teacher" is the free-text `jobTitle` set by the school's IT or its SIS. There is no single "role" field. Through Work IQ, only `jobTitle` comes back by default: `/me` is allowed and `/education/me` is denied by the default policy below. The director is the school's principal (`principalEmail`) and teaches no class; the teacher is a member of the class and wrote its assignment. Only the student has calendar events and drive files.
 
 1. Send the user to the authorize endpoint (PKCE `code_challenge` optional but verified when present; `response_mode` `query`, `fragment` or `form_post`):
 
