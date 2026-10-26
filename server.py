@@ -48,10 +48,14 @@ GRAPH_SCOPES = ("User.Read", "EduRoster.ReadBasic", "EduAssignments.ReadBasic", 
 OIDC_SCOPES = ("openid", "profile", "email", "offline_access")
 
 STUDENT_ID = "3f6c1a2b-9d4e-4c8f-a1b2-7e5d9c0f1a23"
+TEACHER_ID = "7a9c1e3f-5b7d-4f9a-8c1e-3a5c7e9b1d4f"
+DIRECTOR_ID = "9e1a3c5f-7d9b-4b1d-a3f5-7c9e1b3d5f8a"
 CLASS_ID = "b8d2e4f6-1a3c-4e5b-8d7f-9a0b1c2d3e4f"
 SCHOOL_ID = "c4e6a8b0-2d4f-4a6c-8e0b-1d3f5a7c9e2b"
 ASSIGNMENT_ID = "d5f7b9c1-3e5a-4b7d-9f1c-2e4a6c8e0a3d"
 UPN = "amina.demo@neomind.test"
+TEACHER_UPN = "demo.teacher@neomind.test"
+DIRECTOR_UPN = "principal@neomind.test"  # the school's principalEmail
 
 # --- Graph fixtures (v1.0 resource shapes) -----------------------------------
 
@@ -88,6 +92,61 @@ EDUCATION_STUDENT = {  # microsoft.graph.educationUser
         "graduationYear": "2032",
         "studentNumber": "0001",
     },
+}
+# A role in the organisation comes from two places in Graph, as in a real
+# school tenant: primaryRole on the educationUser, which is only ever
+# student, teacher or none, and the free-text jobTitle on the user, which is
+# where a title such as "Director" lives. Staff who don't teach are "none".
+TEACHER = {  # microsoft.graph.user
+    "businessPhones": [],
+    "displayName": "Demo Teacher",
+    "givenName": "Demo",
+    "jobTitle": "Class Teacher",
+    "mail": TEACHER_UPN,
+    "mobilePhone": None,
+    "officeLocation": None,
+    "preferredLanguage": "en-GB",
+    "surname": "Teacher",
+    "userPrincipalName": TEACHER_UPN,
+    "id": TEACHER_ID,
+}
+EDUCATION_TEACHER = {  # microsoft.graph.educationUser
+    "id": TEACHER_ID,
+    "accountEnabled": True,
+    "displayName": "Demo Teacher",
+    "givenName": "Demo",
+    "surname": "Teacher",
+    "mail": TEACHER_UPN,
+    "userPrincipalName": TEACHER_UPN,
+    "userType": "Member",
+    "primaryRole": "teacher",
+    "onPremisesInfo": {"immutableId": None},
+    "teacher": {"externalId": "teacher-01", "teacherNumber": "T001"},
+}
+DIRECTOR = {  # microsoft.graph.user
+    "businessPhones": [],
+    "displayName": "Demo Principal",
+    "givenName": "Demo",
+    "jobTitle": "Director",
+    "mail": DIRECTOR_UPN,
+    "mobilePhone": None,
+    "officeLocation": None,
+    "preferredLanguage": "en-GB",
+    "surname": "Principal",
+    "userPrincipalName": DIRECTOR_UPN,
+    "id": DIRECTOR_ID,
+}
+EDUCATION_DIRECTOR = {  # microsoft.graph.educationUser
+    "id": DIRECTOR_ID,
+    "accountEnabled": True,
+    "displayName": "Demo Principal",
+    "givenName": "Demo",
+    "surname": "Principal",
+    "mail": DIRECTOR_UPN,
+    "userPrincipalName": DIRECTOR_UPN,
+    "userType": "Member",
+    "primaryRole": "none",
+    "onPremisesInfo": {"immutableId": None},
 }
 CLASS = {  # microsoft.graph.educationClass
     "id": CLASS_ID,
@@ -155,8 +214,8 @@ ASSIGNMENT = {  # microsoft.graph.educationAssignment, as a student sees it
     "languageTag": "en-GB",
     "createdDateTime": "2026-09-14T17:00:00Z",
     "lastModifiedDateTime": "2026-09-15T08:00:00Z",
-    "createdBy": {"user": {"displayName": "Demo Teacher", "id": None}},
-    "lastModifiedBy": {"user": {"displayName": "Demo Teacher", "id": None}},
+    "createdBy": {"user": {"displayName": "Demo Teacher", "id": TEACHER_ID}},
+    "lastModifiedBy": {"user": {"displayName": "Demo Teacher", "id": TEACHER_ID}},
     "webUrl": "https://teams.microsoft.com/l/entity/66aeee93-507d-479a-a3ef-8f494af43945/classroom",
     "resourcesFolderUrl": None,
     "feedbackResourcesFolderUrl": None,
@@ -189,6 +248,72 @@ EVENTS = [  # microsoft.graph.event
     }
 ]
 
+# Everyone who can sign in, by object id: their Graph data and the codes and
+# tokens Entra issues them. The student's keep their original values, so
+# clients written against the one-student simulator still work. Only the
+# student has calendar events and drive files.
+ACCOUNTS = {
+    STUDENT_ID: {
+        "user": STUDENT,
+        "education": EDUCATION_STUDENT,
+        "classes": [CLASS],
+        "schools": [SCHOOL],
+        "events": EVENTS,
+        "drive": DRIVE_ITEMS,
+        "auth_code": AUTH_CODE,
+        "refresh_token": REFRESH_TOKEN,
+        "graph_token": GRAPH_TOKEN,
+        "workiq_token": WORKIQ_TOKEN,
+        "subject": "sim-pairwise-subject-student-001",
+    },
+    TEACHER_ID: {
+        "user": TEACHER,
+        "education": EDUCATION_TEACHER,
+        "classes": [CLASS],
+        "schools": [SCHOOL],
+        "events": [],
+        "drive": {},
+        "auth_code": "sim-auth-code-teacher-001",
+        "refresh_token": "sim-refresh-token-teacher-001",
+        "graph_token": "sim-graph-token-teacher-001",
+        "workiq_token": "sim-workiq-token-teacher-001",
+        "subject": "sim-pairwise-subject-teacher-001",
+    },
+    DIRECTOR_ID: {
+        "user": DIRECTOR,
+        "education": EDUCATION_DIRECTOR,
+        "classes": [],
+        "schools": [SCHOOL],
+        "events": [],
+        "drive": {},
+        "auth_code": "sim-auth-code-director-001",
+        "refresh_token": "sim-refresh-token-director-001",
+        "graph_token": "sim-graph-token-director-001",
+        "workiq_token": "sim-workiq-token-director-001",
+        "subject": "sim-pairwise-subject-director-001",
+    },
+}
+CLASS_MEMBERS = [EDUCATION_STUDENT, EDUCATION_TEACHER]
+
+
+def _by(field: str) -> dict[str, str]:
+    return {account[field]: user_id for user_id, account in ACCOUNTS.items()}
+
+
+AUTH_CODES, REFRESH_TOKENS = _by("auth_code"), _by("refresh_token")
+GRAPH_TOKENS, WORKIQ_TOKENS = _by("graph_token"), _by("workiq_token")
+
+
+def account_for(user: str | None) -> str | None:
+    """The object id a user id or UPN names, or None if nobody has it."""
+    if not user:
+        return None
+    lowered = user.lower()
+    return next(
+        (user_id for user_id, account in ACCOUNTS.items() if lowered in (user_id, account["user"]["userPrincipalName"].lower())),
+        None,
+    )
+
 # --- Graph router ------------------------------------------------------------
 
 
@@ -218,9 +343,10 @@ def _collection(context: str, items: list[dict]) -> tuple[int, dict]:
     return 200, {"@odata.context": GRAPH_CONTEXT + context, "value": items}
 
 
-def _is_student(user_id: str | None) -> bool:
-    """`None` is the /me alias; users can also be addressed by UPN."""
-    return user_id is None or user_id.lower() in (STUDENT_ID, UPN)
+def _account(user_id: str | None, me: str) -> dict | None:
+    """`None` is the /me alias; users can also be addressed by id or UPN."""
+    found = me if user_id is None else account_for(user_id)
+    return ACCOUNTS.get(found) if found else None
 
 
 def _parse_datetime(value: str) -> datetime:
@@ -230,57 +356,61 @@ def _parse_datetime(value: str) -> datetime:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
-def _user(match: re.Match, query: dict) -> tuple[int, dict]:
-    return _entity("users/$entity", STUDENT) if _is_student(match["user"]) else _not_found(match["user"])
+def _user(match: re.Match, query: dict, me: str) -> tuple[int, dict]:
+    account = _account(match["user"], me)
+    return _entity("users/$entity", account["user"]) if account else _not_found(match["user"])
 
 
-def _education_user(match: re.Match, query: dict) -> tuple[int, dict]:
-    if not _is_student(match["user"]):
+def _education_user(match: re.Match, query: dict, me: str) -> tuple[int, dict]:
+    account = _account(match["user"], me)
+    if account is None:
         return _not_found(match["user"])
-    return _entity("education/users/$entity", EDUCATION_STUDENT)
+    return _entity("education/users/$entity", account["education"])
 
 
-def _user_classes(match: re.Match, query: dict) -> tuple[int, dict]:
-    if not _is_student(match["user"]):
+def _user_classes(match: re.Match, query: dict, me: str) -> tuple[int, dict]:
+    account = _account(match["user"], me)
+    if account is None:
         return _not_found(match["user"])
-    return _collection("education/classes", [CLASS])
+    return _collection("education/classes", account["classes"])
 
 
-def _user_schools(match: re.Match, query: dict) -> tuple[int, dict]:
-    if not _is_student(match["user"]):
+def _user_schools(match: re.Match, query: dict, me: str) -> tuple[int, dict]:
+    account = _account(match["user"], me)
+    if account is None:
         return _not_found(match["user"])
+    return _collection("education/schools", account["schools"])
+
+
+def _schools(match: re.Match, query: dict, me: str) -> tuple[int, dict]:
     return _collection("education/schools", [SCHOOL])
 
 
-def _schools(match: re.Match, query: dict) -> tuple[int, dict]:
-    return _collection("education/schools", [SCHOOL])
-
-
-def _school(match: re.Match, query: dict) -> tuple[int, dict]:
+def _school(match: re.Match, query: dict, me: str) -> tuple[int, dict]:
     if match["school"].lower() != SCHOOL_ID:
         return _not_found(match["school"])
     return _entity("education/schools/$entity", SCHOOL)
 
 
-def _class(match: re.Match, query: dict) -> tuple[int, dict]:
+def _class(match: re.Match, query: dict, me: str) -> tuple[int, dict]:
     if match["cls"].lower() != CLASS_ID:
         return _not_found(match["cls"])
     return _entity("education/classes/$entity", CLASS)
 
 
-def _class_members(match: re.Match, query: dict) -> tuple[int, dict]:
+def _class_members(match: re.Match, query: dict, me: str) -> tuple[int, dict]:
     if match["cls"].lower() != CLASS_ID:
         return _not_found(match["cls"])
-    return _collection("Collection(microsoft.graph.educationUser)", [EDUCATION_STUDENT])
+    return _collection("Collection(microsoft.graph.educationUser)", CLASS_MEMBERS)
 
 
-def _class_assignments(match: re.Match, query: dict) -> tuple[int, dict]:
+def _class_assignments(match: re.Match, query: dict, me: str) -> tuple[int, dict]:
     if match["cls"].lower() != CLASS_ID:
         return _not_found(match["cls"])
     return _collection(f"education/classes('{CLASS_ID}')/assignments", [ASSIGNMENT])
 
 
-def _class_assignment(match: re.Match, query: dict) -> tuple[int, dict]:
+def _class_assignment(match: re.Match, query: dict, me: str) -> tuple[int, dict]:
     if match["cls"].lower() != CLASS_ID:
         return _not_found(match["cls"])
     if match["assignment"].lower() != ASSIGNMENT_ID:
@@ -288,7 +418,7 @@ def _class_assignment(match: re.Match, query: dict) -> tuple[int, dict]:
     return _entity(f"education/classes('{CLASS_ID}')/assignments/$entity", ASSIGNMENT)
 
 
-def _calendar_view(match: re.Match, query: dict) -> tuple[int, dict]:
+def _calendar_view(match: re.Match, query: dict, me: str) -> tuple[int, dict]:
     params = {key.lower(): values[-1] for key, values in query.items()}
     if not params.get("startdatetime") or not params.get("enddatetime"):
         return graph_error(
@@ -302,23 +432,23 @@ def _calendar_view(match: re.Match, query: dict) -> tuple[int, dict]:
         return graph_error(400, "ErrorInvalidParameter", "StartDateTime and EndDateTime must be ISO 8601 date/time values.")
     events = [
         event
-        for event in EVENTS
+        for event in ACCOUNTS[me]["events"]
         if _parse_datetime(event["start"]["dateTime"]) < end and _parse_datetime(event["end"]["dateTime"]) > start
     ]
-    return _collection(f"users('{STUDENT_ID}')/calendarView", events)
+    return _collection(f"users('{me}')/calendarView", events)
 
 
-def _drive_search(match: re.Match, query: dict) -> tuple[int, dict]:
+def _drive_search(match: re.Match, query: dict, me: str) -> tuple[int, dict]:
     needle = match["q"].lower()
-    items = [item for item in DRIVE_ITEMS.values() if needle in DRIVE_SEARCH_TEXT[item["id"]]]
+    items = [item for item in ACCOUNTS[me]["drive"].values() if needle in DRIVE_SEARCH_TEXT[item["id"]]]
     return _collection("Collection(driveItem)", items)
 
 
-def _drive_item(match: re.Match, query: dict) -> tuple[int, dict]:
-    item = DRIVE_ITEMS.get(match["item"].lower())
+def _drive_item(match: re.Match, query: dict, me: str) -> tuple[int, dict]:
+    item = ACCOUNTS[me]["drive"].get(match["item"].lower())
     if item is None:
         return graph_error(404, "itemNotFound", "The resource could not be found.")
-    return _entity(f"users('{STUDENT_ID}')/drive/items/$entity", item)
+    return _entity(f"users('{me}')/drive/items/$entity", item)
 
 
 def _route(pattern: str) -> re.Pattern:
@@ -363,24 +493,25 @@ def _apply_query_options(body: dict, query: dict) -> tuple[int, dict]:
     return 200, {**body, "value": [select(item) for item in items]}
 
 
-def graph_fetch(path: str) -> tuple[int, dict]:
-    """Resolve a Graph v1.0 relative read path (without the /v1.0 prefix)."""
+def graph_fetch(path: str, me: str = STUDENT_ID) -> tuple[int, dict]:
+    """Resolve a Graph v1.0 relative read path (without the /v1.0 prefix),
+    as the user `me` (the signed-in user's object id) reads it."""
     parsed = urlparse(path)
     route_path = unquote(parsed.path).rstrip("/") or "/"
     query = parse_qs(parsed.query, keep_blank_values=True)
     for pattern, handler in GRAPH_ROUTES:
         match = pattern.fullmatch(route_path)
         if match:
-            status, body = handler(match, query)
+            status, body = handler(match, query, me)
             return _apply_query_options(body, query) if status == 200 else (status, body)
     segment = route_path.rsplit("/", 1)[-1]
     return graph_error(400, "BadRequest", f"Resource not found for the segment '{segment}'.")
 
 
-def drive_content(path: str) -> dict | None:
+def drive_content(path: str, me: str = STUDENT_ID) -> dict | None:
     """The bytes behind /me/drive/items/{id}/content, or None if unknown."""
     match = re.fullmatch(r"/me/drive/items/([^/]+)/content", unquote(urlparse(path).path), re.IGNORECASE)
-    item = DRIVE_ITEMS.get(match[1].lower()) if match else None
+    item = ACCOUNTS[me]["drive"].get(match[1].lower()) if match else None
     if item is None:
         return None
     return {"name": item["name"], "contentType": item["file"]["mimeType"], "content": NOTES_CONTENT}
@@ -426,7 +557,7 @@ def policy_error(reason: str) -> dict:
     return {"error": {"code": "PolicyDenied", "message": f"Request denied by Work IQ tenant policy: {reason}."}}
 
 
-def workiq_graph(url: str) -> tuple[int, dict]:
+def workiq_graph(url: str, me: str = STUDENT_ID) -> tuple[int, dict]:
     """A Graph read as Work IQ performs it: policy check, then a bounded $top."""
     reason = policy_denial(url)
     if reason:
@@ -437,7 +568,7 @@ def workiq_graph(url: str) -> tuple[int, dict]:
     query = {key: values for key, values in query.items() if key.lower() != "$top"}
     top_value = min(int(top), WORKIQ_MAX_TOP) if top and top.isdigit() else WORKIQ_DEFAULT_TOP
     query["$top"] = [str(top_value)]
-    return graph_fetch(parsed.path + "?" + urlencode(query, doseq=True))
+    return graph_fetch(parsed.path + "?" + urlencode(query, doseq=True), me)
 
 
 # --- Work IQ MCP tools -------------------------------------------------------
@@ -701,8 +832,9 @@ def _string_argument(arguments: dict, name: str) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def mcp_call(name: str, arguments: dict) -> dict:
-    """Run one tools/call. Unknown tools are a protocol error, per the MCP spec."""
+def mcp_call(name: str, arguments: dict, me: str = STUDENT_ID) -> dict:
+    """Run one tools/call as the user `me`. Unknown tools are a protocol
+    error, per the MCP spec."""
     if name not in MCP_TOOL_NAMES:
         raise JsonRpcError(-32602, f"Unknown tool: {name}")
 
@@ -716,14 +848,14 @@ def mcp_call(name: str, arguments: dict) -> dict:
         urls = arguments.get("entityUrls")
         if not isinstance(urls, list) or not urls or not all(isinstance(url, str) for url in urls):
             return _tool_error("entityUrls must be a non-empty array of relative resource paths.")
-        results = [{"data": data, "statusCode": status} for status, data in map(workiq_graph, urls)]
+        results = [{"data": data, "statusCode": status} for status, data in (workiq_graph(url, me) for url in urls)]
         return _json_result({"results": results})
 
     if name == "call_function":
         url = _string_argument(arguments, "functionUrl")
         if url is None:
             return _tool_error("functionUrl is required.")
-        status, data = workiq_graph(url)
+        status, data = workiq_graph(url, me)
         return _json_result({"data": data, "statusCode": status})
 
     if name == "fetch_blob":
@@ -735,7 +867,7 @@ def mcp_call(name: str, arguments: dict) -> dict:
             return _tool_error(f"Request denied by Work IQ tenant policy: {reason}.")
         if arguments.get("format"):
             return _tool_error("Format conversion is only supported for Office documents; this file can't be converted.")
-        blob = drive_content(path)
+        blob = drive_content(path, me)
         if blob is None:
             return _tool_error(f"Microsoft Graph returned 404 itemNotFound for {path}.")
         structured = {
@@ -801,12 +933,13 @@ def mcp_initialize(params: dict) -> dict:
         "protocolVersion": version,
         "capabilities": {"tools": {"listChanged": False}},
         "serverInfo": {"name": "neomind-workiq-sim", "version": "0.2.0"},
-        "instructions": "Local Work IQ MCP simulator. Seeded data covers one demo student; mutation tools are denied by default tenant policy.",
+        "instructions": "Local Work IQ MCP simulator. Seeded data covers a demo student, teacher and director; mutation tools are denied by default tenant policy.",
     }
 
 
-def mcp_handle(message: dict) -> dict:
-    """Answer one JSON-RPC request (not a notification) with a JSON-RPC response."""
+def mcp_handle(message: dict, me: str = STUDENT_ID) -> dict:
+    """Answer one JSON-RPC request (not a notification) with a JSON-RPC
+    response, as the user `me`."""
     request_id = message.get("id")
     params = message.get("params", {})
     try:
@@ -825,7 +958,7 @@ def mcp_handle(message: dict) -> dict:
                 raise JsonRpcError(-32602, "tools/call requires a tool name.")
             if not isinstance(arguments, dict):
                 raise JsonRpcError(-32602, "arguments must be an object.")
-            result = mcp_call(name, arguments)
+            result = mcp_call(name, arguments, me)
         else:
             raise JsonRpcError(-32601, f"Method not found: {method}")
     except JsonRpcError as exc:
@@ -914,9 +1047,11 @@ def token_response(form: dict, client_id: str) -> tuple[int, dict]:
     grant_type = form.get("grant_type")
     nonce = None
     if grant_type == "authorization_code":
-        if form.get("code") != AUTH_CODE:
+        code = form.get("code")
+        user_id = AUTH_CODES.get(code)
+        if user_id is None:
             return 400, entra_error("invalid_grant", 70000, "The provided value for the 'code' parameter is not valid.")
-        pending = PENDING_AUTHORIZATIONS.get(AUTH_CODE)
+        pending = PENDING_AUTHORIZATIONS.get(code)
         if pending:
             if form.get("redirect_uri") != pending["redirect_uri"]:
                 return 400, entra_error(
@@ -937,10 +1072,11 @@ def token_response(form: dict, client_id: str) -> tuple[int, dict]:
                         "The Code_Verifier does not match the code_challenge supplied in the authorization request.",
                     )
             nonce = pending["nonce"]
-            PENDING_AUTHORIZATIONS.pop(AUTH_CODE)  # codes are single-use
+            PENDING_AUTHORIZATIONS.pop(code)  # codes are single-use
         scope = form.get("scope") or (pending["scope"] if pending else "")
     elif grant_type == "refresh_token":
-        if form.get("refresh_token") != REFRESH_TOKEN:
+        user_id = REFRESH_TOKENS.get(form.get("refresh_token"))
+        if user_id is None:
             return 400, entra_error("invalid_grant", 9002313, "Invalid request. Request is malformed or invalid.")
         scope = form.get("scope", "")
     else:
@@ -952,15 +1088,16 @@ def token_response(form: dict, client_id: str) -> tuple[int, dict]:
     requested = {item.lower() for item in scope.split()}
     oidc = [item for item in ("profile", "openid", "email") if item in requested]
     granted = [WORKIQ_SCOPE] if resource == "workiq" else list(GRAPH_SCOPES)
+    account = ACCOUNTS[user_id]
     body = {
         "token_type": "Bearer",
         "scope": " ".join(granted + oidc),
         "expires_in": 3599,
         "ext_expires_in": 3599,
-        "access_token": WORKIQ_TOKEN if resource == "workiq" else GRAPH_TOKEN,
+        "access_token": account["workiq_token" if resource == "workiq" else "graph_token"],
     }
     if "offline_access" in requested or grant_type == "refresh_token":
-        body["refresh_token"] = REFRESH_TOKEN
+        body["refresh_token"] = account["refresh_token"]
     if "openid" in requested:
         now = int(time.time())
         claims = {
@@ -969,10 +1106,10 @@ def token_response(form: dict, client_id: str) -> tuple[int, dict]:
             "iat": now,
             "nbf": now,
             "exp": now + 3600,
-            "name": STUDENT["displayName"],
-            "oid": STUDENT_ID,
-            "preferred_username": UPN,
-            "sub": "sim-pairwise-subject-student-001",
+            "name": account["user"]["displayName"],
+            "oid": user_id,
+            "preferred_username": account["user"]["userPrincipalName"],
+            "sub": account["subject"],
             "tid": TENANT_ID,
             "ver": "2.0",
         }
@@ -1055,10 +1192,13 @@ class Handler(BaseHTTPRequestHandler):
                 },
             )
         elif parsed.path == "/oidc/userinfo":
-            if self._bearer() != GRAPH_TOKEN:
+            user_id = GRAPH_TOKENS.get(self._bearer())
+            if user_id is None:
                 self._send(401, {"error": {"code": "InvalidAuthenticationToken", "message": "Access token validation failure."}})
             else:
-                self._send(200, {"sub": "sim-pairwise-subject-student-001", "name": STUDENT["displayName"], "family_name": STUDENT["surname"], "given_name": STUDENT["givenName"], "email": UPN})
+                account = ACCOUNTS[user_id]
+                user = account["user"]
+                self._send(200, {"sub": account["subject"], "name": user["displayName"], "family_name": user["surname"], "given_name": user["givenName"], "email": user["mail"]})
         elif parsed.path == "/mcp":
             # No server-initiated SSE stream is offered.
             self._send(HTTPStatus.METHOD_NOT_ALLOWED, headers={"Allow": "POST"})
@@ -1092,10 +1232,11 @@ class Handler(BaseHTTPRequestHandler):
         request_id = self.headers.get("client-request-id") or str(uuid.uuid4())
         headers = {"request-id": request_id, "client-request-id": request_id}
         token = self._bearer()
-        if token != GRAPH_TOKEN:
+        me = GRAPH_TOKENS.get(token)
+        if me is None:
             if token is None:
                 message = "Access token is empty."
-            elif token == WORKIQ_TOKEN:
+            elif token in WORKIQ_TOKENS:
                 message = "Access token validation failure. Invalid audience."
             else:
                 message = "IDX14100: JWT is not well formed, there are no dots (.)."
@@ -1103,16 +1244,17 @@ class Handler(BaseHTTPRequestHandler):
             self._send(401, graph_error(401, "InvalidAuthenticationToken", message)[1], content_type=GRAPH_CONTENT_TYPE, headers=headers)
             return
         relative = parsed.path[len("/v1.0"):]
-        if drive_content(relative) is not None:
+        if drive_content(relative, me) is not None:
             # Graph answers /content with a redirect to a pre-authenticated URL.
             item_id = unquote(relative).split("/")[4]
             self._redirect(f"{BASE_URL}/sim-download/{item_id}")
             return
-        status, data = graph_fetch(relative + (("?" + parsed.query) if parsed.query else ""))
+        status, data = graph_fetch(relative + (("?" + parsed.query) if parsed.query else ""), me)
         self._send(status, data, content_type=GRAPH_CONTENT_TYPE, headers=headers)
 
     def _download(self, item_id: str) -> None:
-        blob = drive_content(f"/me/drive/items/{item_id}/content")
+        owner = next((user_id for user_id, account in ACCOUNTS.items() if item_id.lower() in account["drive"]), STUDENT_ID)
+        blob = drive_content(f"/me/drive/items/{item_id}/content", owner)
         if blob is None:
             self._send(404, {"error": "not_found"})
         else:
@@ -1127,7 +1269,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(403, {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Origin not allowed."}})
             return
         token = self._bearer()
-        if token != WORKIQ_TOKEN:
+        me = WORKIQ_TOKENS.get(token)
+        if me is None:
             challenge = f'Bearer resource_metadata="{BASE_URL}/.well-known/oauth-protected-resource/mcp", scope="{WORKIQ_SCOPE}"'
             if token:
                 challenge += ', error="invalid_token"'
@@ -1150,7 +1293,7 @@ class Handler(BaseHTTPRequestHandler):
             # Notifications and client responses are acknowledged without a body.
             self._send(HTTPStatus.ACCEPTED)
             return
-        self._send(200, mcp_handle(message))
+        self._send(200, mcp_handle(message, me))
 
     # Entra ------------------------------------------------------------------
 
@@ -1211,14 +1354,24 @@ class Handler(BaseHTTPRequestHandler):
         if challenge and method not in ("S256", "plain"):
             fail("invalid_request", 50148, f"The code_challenge_method '{method}' is not supported.")
             return
-        PENDING_AUTHORIZATIONS[AUTH_CODE] = {
+        # Entra signs in whoever the user picks on its page; with no page here,
+        # login_hint (a UPN, as Entra accepts) picks the account, then
+        # SIM_DEFAULT_USER, then the student. Simulator assumption: an unknown
+        # account fails like a sign-in to a user the tenant doesn't have.
+        who = query.get("login_hint") or os.environ.get("SIM_DEFAULT_USER") or UPN
+        user_id = account_for(who)
+        if user_id is None:
+            fail("invalid_request", 50034, f"The user account {who} does not exist in the {TENANT_ID} directory.")
+            return
+        code = ACCOUNTS[user_id]["auth_code"]
+        PENDING_AUTHORIZATIONS[code] = {
             "redirect_uri": redirect_uri,
             "scope": query["scope"],
             "code_challenge": challenge,
             "code_challenge_method": method,
             "nonce": query.get("nonce"),
         }
-        respond({"code": AUTH_CODE})
+        respond({"code": code})
 
 
 if __name__ == "__main__":

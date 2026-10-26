@@ -147,7 +147,9 @@ class WorkIQToolTests(unittest.TestCase):
         )
 
 
-class HttpTests(unittest.TestCase):
+class ServerCase(unittest.TestCase):
+    """A live simulator on a free port, and helpers to call it."""
+
     @classmethod
     def setUpClass(cls):
         cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
@@ -179,6 +181,8 @@ class HttpTests(unittest.TestCase):
     def token(self, **form):
         return self.request("POST", f"/{server.TENANT_ID}/oauth2/v2.0/token", urlencode(form), {"Content-Type": "application/x-www-form-urlencoded"})
 
+
+class HttpTests(ServerCase):
     def test_initialize_negotiates_the_protocol_version(self):
         _, _, known = self.mcp({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}})
         _, _, unknown = self.mcp({"jsonrpc": "2.0", "id": 2, "method": "initialize", "params": {"protocolVersion": "1999-01-01"}})
@@ -284,6 +288,112 @@ class HttpTests(unittest.TestCase):
         params = parse_qs(urlparse(headers["Location"]).query)
         self.assertEqual((status, params["error"], params["state"]), (302, ["unsupported_response_type"], ["s"]))
         self.assertTrue(params["error_description"][0].startswith("AADSTS700054"))
+
+
+class RoleTests(unittest.TestCase):
+    """A role comes from Graph the way a real school tenant gives it:
+    primaryRole (student, teacher or none) and the free-text jobTitle."""
+
+    PEOPLE = {
+        server.STUDENT_ID: (None, "student"),
+        server.TEACHER_ID: ("Class Teacher", "teacher"),
+        server.DIRECTOR_ID: ("Director", "none"),
+    }
+
+    def test_each_person_has_a_job_title_and_a_primary_role(self):
+        for user_id, (job_title, role) in self.PEOPLE.items():
+            _, user = server.graph_fetch("/me", user_id)
+            _, education = server.graph_fetch("/education/me", user_id)
+            self.assertEqual((user["id"], user["jobTitle"]), (user_id, job_title))
+            self.assertEqual((education["id"], education["primaryRole"]), (user_id, role))
+
+    def test_primary_role_only_takes_graphs_values(self):
+        roles = {account["education"]["primaryRole"] for account in server.ACCOUNTS.values()}
+        self.assertLessEqual(roles, {"student", "teacher", "none"})
+
+    def test_only_the_matching_role_block_is_present(self):
+        _, teacher = server.graph_fetch("/education/me", server.TEACHER_ID)
+        _, director = server.graph_fetch("/education/me", server.DIRECTOR_ID)
+        self.assertEqual(teacher["teacher"]["externalId"], "teacher-01")
+        self.assertNotIn("student", teacher)
+        self.assertFalse({"student", "teacher"} & set(director))
+
+    def test_the_director_is_the_schools_principal_and_teaches_no_class(self):
+        _, director = server.graph_fetch("/me", server.DIRECTOR_ID)
+        self.assertEqual(director["mail"], server.SCHOOL["principalEmail"])
+        _, schools = server.graph_fetch("/education/me/schools", server.DIRECTOR_ID)
+        _, classes = server.graph_fetch("/education/me/classes", server.DIRECTOR_ID)
+        self.assertEqual(([school["id"] for school in schools["value"]], classes["value"]), ([server.SCHOOL_ID], []))
+
+    def test_the_teacher_is_in_the_class_and_wrote_the_assignment(self):
+        _, members = server.graph_fetch(f"/education/classes/{server.CLASS_ID}/members")
+        self.assertEqual({m["id"]: m["primaryRole"] for m in members["value"]}, {server.STUDENT_ID: "student", server.TEACHER_ID: "teacher"})
+        _, assignment = server.graph_fetch(f"/education/classes/{server.CLASS_ID}/assignments/{server.ASSIGNMENT_ID}")
+        self.assertEqual(assignment["createdBy"]["user"]["id"], server.TEACHER_ID)
+
+    def test_users_can_be_read_by_id_or_upn(self):
+        for user in (server.TEACHER_ID, server.TEACHER_UPN.upper()):
+            status, body = server.graph_fetch(f"/users/{user}")
+            self.assertEqual((status, body["jobTitle"]), (200, "Class Teacher"))
+
+    def test_only_the_student_has_files_and_events(self):
+        window = "?startDateTime=2026-09-01T00:00:00Z&endDateTime=2026-10-01T00:00:00Z"
+        for user_id in (server.TEACHER_ID, server.DIRECTOR_ID):
+            self.assertEqual(server.graph_fetch("/me/drive/root/search(q='fractions')", user_id)[1]["value"], [])
+            self.assertEqual(server.graph_fetch("/me/calendarView" + window, user_id)[1]["value"], [])
+            self.assertEqual(server.graph_fetch(f"/me/drive/items/{server.DRIVE_ITEM['id']}", user_id)[0], 404)
+
+    def test_work_iq_gives_the_job_title_but_keeps_education_behind_the_default_policy(self):
+        result = server.mcp_call("fetch", {"entityUrls": ["/me", "/education/me"]}, server.DIRECTOR_ID)
+        me, education = result["structuredContent"]["results"]
+        self.assertEqual((me["statusCode"], me["data"]["jobTitle"]), (200, "Director"))
+        self.assertEqual((education["statusCode"], education["data"]["error"]["code"]), (403, "PolicyDenied"))
+
+
+class SignInAsTests(ServerCase):
+    """Who signs in: login_hint, then SIM_DEFAULT_USER, then the student."""
+
+    def sign_in(self, scope, **extra):
+        query = urlencode({"client_id": "c", "response_type": "code", "redirect_uri": "http://localhost/cb", "scope": scope, **extra})
+        status, headers, _ = self.request("GET", f"/common/oauth2/v2.0/authorize?{query}")
+        self.assertEqual(status, 302)
+        params = parse_qs(urlparse(headers["Location"]).query)
+        if "error" in params:
+            return params
+        status, _, body = self.token(grant_type="authorization_code", client_id="c", code=params["code"][0], redirect_uri="http://localhost/cb")
+        self.assertEqual(status, 200)
+        return body
+
+    def test_login_hint_signs_in_the_teacher(self):
+        body = self.sign_in(f"{server.WORKIQ_SCOPE} openid offline_access", login_hint=server.TEACHER_UPN)
+        claims = json.loads(base64.urlsafe_b64decode(body["id_token"].split(".")[1] + "=="))
+        self.assertEqual((claims["oid"], claims["preferred_username"]), (server.TEACHER_ID, server.TEACHER_UPN))
+        _, _, reply = self.mcp({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "fetch", "arguments": {"entityUrls": ["/me"]}}}, token=body["access_token"])
+        self.assertEqual(reply["result"]["structuredContent"]["results"][0]["data"]["jobTitle"], "Class Teacher")
+
+        # The teacher's refresh token buys the teacher's Graph token.
+        status, _, graph = self.token(grant_type="refresh_token", client_id="c", refresh_token=body["refresh_token"], scope="EduRoster.ReadBasic")
+        status, _, education = self.request("GET", "/v1.0/education/me", headers={"Authorization": f"Bearer {graph['access_token']}"})
+        self.assertEqual((status, education["primaryRole"]), (200, "teacher"))
+        _, _, userinfo = self.request("GET", "/oidc/userinfo", headers={"Authorization": f"Bearer {graph['access_token']}"})
+        self.assertEqual(userinfo["email"], server.TEACHER_UPN)
+
+    def test_sim_default_user_signs_in_the_director(self):
+        os.environ["SIM_DEFAULT_USER"] = server.DIRECTOR_UPN
+        try:
+            body = self.sign_in("User.Read")
+        finally:
+            del os.environ["SIM_DEFAULT_USER"]
+        _, _, me = self.request("GET", "/v1.0/me", headers={"Authorization": f"Bearer {body['access_token']}"})
+        self.assertEqual((me["id"], me["jobTitle"]), (server.DIRECTOR_ID, "Director"))
+
+    def test_with_no_hint_the_student_signs_in(self):
+        self.assertEqual(self.sign_in("User.Read")["access_token"], server.GRAPH_TOKEN)
+
+    def test_an_unknown_account_cannot_sign_in(self):
+        params = self.sign_in("User.Read", login_hint="nobody@neomind.test", state="s")
+        self.assertEqual((params["error"], params["state"]), (["invalid_request"], ["s"]))
+        self.assertTrue(params["error_description"][0].startswith("AADSTS50034"))
 
 
 class ConfigTests(unittest.TestCase):
