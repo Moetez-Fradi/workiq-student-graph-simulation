@@ -103,10 +103,13 @@ Discovery: `GET /{tenant}/v2.0/.well-known/openid-configuration` (Entra's format
 | `GET /health` | Readiness probe. | No |
 | `GET /{tenant}/v2.0/.well-known/openid-configuration` | Entra OIDC metadata. | No |
 | `GET /{tenant}/oauth2/v2.0/authorize` | Authorization-code redirect. | No |
-| `POST /{tenant}/oauth2/v2.0/token` | `authorization_code` and `refresh_token` grants. | No |
+| `POST /{tenant}/oauth2/v2.0/token` | `authorization_code` and `refresh_token` grants; `client_credentials` for NeoMind's app. | No |
+| `GET /{tenant}/adminconsent` | The school admin approves NeoMind's app for the tenant. | No |
 | `GET /.well-known/oauth-protected-resource/mcp` | MCP protected-resource metadata. | No |
 | `POST /mcp` | Work IQ MCP, Streamable HTTP (JSON responses). | Work IQ token |
 | `GET /v1.0/...` | Microsoft Graph v1.0 reads. | Graph token |
+| `GET /v1.0/sites/...` | The school's curriculum site, read by NeoMind's app. | App token |
+| `POST`/`DELETE /sim-admin/...` | Simulator only: what the school's admin approves or withdraws. | No |
 
 ### Microsoft Graph reads
 
@@ -130,6 +133,41 @@ Seeded IDs: class `b8d2e4f6-1a3c-4e5b-8d7f-9a0b1c2d3e4f`, school `c4e6a8b0-2d4f-
 Errors use Graph's envelope (`error.code`, `error.message`, `error.innerError`): an unknown ID is `404 Request_ResourceNotFound`, an unknown path segment is `400 BadRequest`, a missing calendar window is `400 ErrorInvalidParameter`, and writes are `403 Authorization_RequestDenied` (the student only holds read scopes).
 
 **Mapping to NeoMind:** Graph has no curriculum field. The class's SIS-synced `course.externalId` (`primary_math`) is the realistic hook for choosing NeoMind's catalog, and the student's `student.externalId` (`demo-student-01`) matches NeoMind's fixture `learner_ref`.
+
+### School site (app-only)
+
+NeoMind's curriculum import signs in as itself, not as a user: the `client_credentials` grant with a certificate, against the tenant ID (not `common`). The school's admin approves the app once for the whole tenant and grants it one SharePoint site under `Sites.Selected`.
+
+| Item | Value |
+| --- | --- |
+| App (client) ID | `6b2d4f8a-1c3e-4a5b-9d7f-2e4c6a8b0d1f`, "NeoMind curriculum import" |
+| Scope | `https://graph.microsoft.com/.default` |
+| Credential | `client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer` and a `client_assertion` whose header names a certificate (`x5t` or `x5t#S256`), with `iss` and `sub` the client ID, `aud` the token endpoint and `exp` in the future. A client secret is refused (`AADSTS7000215`). |
+| App token | `sim-app-token-neomind-import-NNN`, one per sign-in, no refresh token |
+| Granted site | `neomind.sharepoint.test,5e7a9c1b-3d5f-4a7b-9c1d-3e5f7a9b1c2d,1a3c5e7f-9b1d-4f3a-8c5e-7a9b1d3f5a6c` (`/sites/curriculum`) |
+| Site not granted | `neomind.sharepoint.test,2c4e6a8b-0d2f-4b4d-8f6a-0c2e4a6c8e1f,7b9d1f3a-5c7e-4a9b-8d1f-3b5d7f9a1c4e` (`/sites/staff`) |
+
+The curriculum site's library holds `Maths/Year 4 maths scheme of work.csv` and `Maths/Year 5 maths scheme of work.csv` (columns `year,term,unit,objective`; objectives in the national curriculum's words, plus one the school wrote) and `Maths/Calculation policy.docx`, which is not a real document.
+
+Paths for the app token (a site is its ID or `{hostname}:/sites/{path}`):
+
+- `/sites/{site}`, `/sites/{site}/drive`
+- `/sites/{site}/drive/root`, `/sites/{site}/drive/root/children`
+- `/sites/{site}/drive/items/{id}`, `/sites/{site}/drive/items/{id}/children` (files carry `@microsoft.graph.downloadUrl`)
+- `/sites/{site}/drive/items/{id}/content` (302 to the download URL)
+
+A site that was not granted is `403 accessDenied`, an unknown one `404 itemNotFound`, `/me` is `400 BadRequest` (no user behind the token) and anything else `403 Authorization_RequestDenied`.
+
+Approval, as the school's admin gives it:
+
+- `GET /{tenant}/adminconsent?client_id=...&redirect_uri=...&state=...` approves at once and redirects with `admin_consent=True&tenant=...`.
+- `POST` or `DELETE /sim-admin/consent` gives or withdraws the approval. Withdrawn, the app's tokens stop working (`401`) and a new sign-in is `AADSTS7000229`.
+- `POST` or `DELETE /sim-admin/sites/{site-id}/grant` grants or revokes one site.
+- `POST /sim-admin/reset` goes back to the start: approved, with the curriculum site granted.
+
+```bash
+curl -s http://127.0.0.1:8787/v1.0/sites/neomind.sharepoint.test:/sites/curriculum   -H 'Authorization: Bearer sim-app-token-neomind-import-001'
+```
 
 ### Work IQ MCP endpoint
 
@@ -176,12 +214,14 @@ Where Microsoft doesn't document a shape, the simulator makes an explicit, comme
 
 - The wire shape of a Work IQ policy denial (a Graph-style 403 `PolicyDenied` body per `fetch` entry, `isError` text for denied tools).
 - `id_token`s are unsigned (`alg: none`) and the JWKS is empty; real Entra tokens are RS256 JWTs, and real access tokens are JWTs rather than opaque strings.
+- A client assertion's signature isn't checked (there are no keys); its header must name a certificate and its claims must be right. The wording for a wrong `aud` is assumed.
+- Withdrawing admin consent ends the app's tokens at once; in Entra they last until they expire, about an hour. `/sim-admin/` stands in for the Entra admin centre and for `POST /sites/{id}/permissions`.
 - Like Entra, the OIDC metadata doesn't advertise `code_challenge_methods_supported`, even though `S256` works. Some strict MCP clients refuse to proceed without it — the same friction they'd hit against Entra.
 
 ## Design boundaries
 
 - Standard-library `http.server`: suitable for local contract tests, not production traffic.
-- OAuth doesn't model consent, client secrets, conditional access, token expiry, or signature validation.
+- OAuth doesn't model user consent, conditional access, token expiry, or signature validation. Admin consent for NeoMind's app is modelled, without a page.
 - There are no write routes. Mutation tools exist (the real server lists them) but are always denied, as by Work IQ's default policy.
 - Fixtures contain fabricated demo data only.
 

@@ -517,6 +517,274 @@ def drive_content(path: str, me: str = STUDENT_ID) -> dict | None:
     return {"name": item["name"], "contentType": item["file"]["mimeType"], "content": NOTES_CONTENT}
 
 
+# --- School site (app-only Graph) --------------------------------------------
+# NeoMind's curriculum import signs in as itself, with a certificate (the
+# client_credentials grant), never as a user. The school's admin approves the
+# app once for the tenant (admin consent) and grants it one SharePoint site
+# (Sites.Selected). Without the grant a site answers 403, and once the consent
+# is withdrawn the app can no longer get a token.
+
+APP_CLIENT_ID = "6b2d4f8a-1c3e-4a5b-9d7f-2e4c6a8b0d1f"
+APP_DISPLAY_NAME = "NeoMind curriculum import"
+GRAPH_DEFAULT_SCOPE = "https://graph.microsoft.com/.default"
+JWT_BEARER = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+SHAREPOINT_HOST = "neomind.sharepoint.test"
+
+
+def _site_entry(site_id: str, path: str, display_name: str, description: str) -> dict:
+    web_url = f"https://{SHAREPOINT_HOST}/sites/{path}"
+    root_id = f"01{path.upper()}ROOT"
+    return {
+        "path": path,
+        "site": {  # microsoft.graph.site
+            "id": site_id,
+            "name": path,
+            "displayName": display_name,
+            "description": description,
+            "webUrl": web_url,
+            "createdDateTime": "2026-09-01T08:00:00Z",
+            "lastModifiedDateTime": "2026-10-20T16:00:00Z",
+            "siteCollection": {"hostname": SHAREPOINT_HOST},
+        },
+        "drive": {  # microsoft.graph.drive, the site's default document library
+            "id": "b!" + site_id.split(",")[1].replace("-", ""),
+            "name": "Documents",
+            "driveType": "documentLibrary",
+            "webUrl": f"{web_url}/Shared%20Documents",
+            "createdDateTime": "2026-09-01T08:00:00Z",
+            "lastModifiedDateTime": "2026-10-20T16:00:00Z",
+        },
+        "root": {"id": root_id, "name": "root", "root": {}, "folder": {"childCount": 0}, "webUrl": f"{web_url}/Shared%20Documents"},
+        "items": {},  # lower-cased item id -> driveItem
+        "children": {root_id.lower(): []},  # lower-cased folder id -> child ids
+        "content": {},  # lower-cased file id -> bytes
+    }
+
+
+def _add_item(entry: dict, parent_id: str, item_id: str, name: str, *, content: bytes | None = None, mime: str | None = None) -> None:
+    root = entry["root"]
+    parent = root if parent_id == root["id"] else entry["items"][parent_id.lower()]
+    parent_path = "/drive/root:" if parent is root else f"{parent['parentReference']['path']}/{parent['name']}"
+    folder_url = root["webUrl"] + parent_path[len("/drive/root:"):]
+    item = {  # microsoft.graph.driveItem
+        "id": item_id,
+        "name": name,
+        "eTag": f'"{{{item_id}}},1"',
+        "cTag": f'"c:{{{item_id}}},1"',
+        "webUrl": f"{folder_url}/{name}".replace(" ", "%20"),
+        "createdDateTime": "2026-09-05T09:00:00Z",
+        "lastModifiedDateTime": "2026-10-20T16:00:00Z",
+        "parentReference": {"driveId": entry["drive"]["id"], "driveType": "documentLibrary", "id": parent["id"], "siteId": entry["site"]["id"], "path": parent_path},
+    }
+    if content is None:
+        item.update(size=0, folder={"childCount": 0})
+        entry["children"][item_id.lower()] = []
+    else:
+        item.update(size=len(content), file={"mimeType": mime})
+        entry["content"][item_id.lower()] = content
+    entry["items"][item_id.lower()] = item
+    entry["children"][parent["id"].lower()].append(item_id)
+    parent["folder"]["childCount"] += 1
+
+
+# A school's scheme of work: each row an objective it teaches, in the national
+# curriculum's words (Open Government Licence), and one row the school wrote
+# itself that matches none.
+YEAR_4_SCHEME = (
+    "year,term,unit,objective\n"
+    '4,Autumn 2,Fractions,"recognise and show, using diagrams, families of common equivalent fractions"\n'
+    '4,Spring 1,Fractions,"add and subtract fractions with the same denominator"\n'
+    '4,Spring 1,Fractions,"solve problems involving increasingly harder fractions to calculate quantities, and fractions to divide '
+    'quantities, including non-unit fractions where the answer is a whole number"\n'
+    '4,Spring 2,Decimals,"recognise and write decimal equivalents of any number of tenths or hundredths"\n'
+).encode()
+YEAR_5_SCHEME = (
+    "year,term,unit,objective\n"
+    '5,Autumn 2,Fractions,"compare and order fractions whose denominators are all multiples of the same number"\n'
+    '5,Autumn 2,Fractions,"identify, name and write equivalent fractions of a given fraction, represented visually, including tenths and hundredths"\n'
+    '5,Spring 1,Fractions,"recognise mixed numbers and improper fractions and convert from one form to the other and write mathematical '
+    'statements > 1 as a mixed number [for example, 2/5 + 4/5 = 6/5 = 1 1/5]"\n'
+    '5,Spring 1,Fractions,"add and subtract fractions with the same denominator and denominators that are multiples of the same number"\n'
+    '5,Spring 2,Fractions,"Fractions in real life: recipes and sharing"\n'
+).encode()
+DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+CURRICULUM_SITE_ID = f"{SHAREPOINT_HOST},5e7a9c1b-3d5f-4a7b-9c1d-3e5f7a9b1c2d,1a3c5e7f-9b1d-4f3a-8c5e-7a9b1d3f5a6c"
+STAFF_SITE_ID = f"{SHAREPOINT_HOST},2c4e6a8b-0d2f-4b4d-8f6a-0c2e4a6c8e1f,7b9d1f3a-5c7e-4a9b-8d1f-3b5d7f9a1c4e"
+CURRICULUM_SITE = _site_entry(CURRICULUM_SITE_ID, "curriculum", "Curriculum", "Schemes of work and policies, by subject.")
+STAFF_SITE = _site_entry(STAFF_SITE_ID, "staff", "Staff", "Staff handbook and rotas.")
+_add_item(CURRICULUM_SITE, CURRICULUM_SITE["root"]["id"], "01CURRICULUMMATHS", "Maths")
+_add_item(CURRICULUM_SITE, "01CURRICULUMMATHS", "01CURRICULUMMATHSY4", "Year 4 maths scheme of work.csv", content=YEAR_4_SCHEME, mime="text/csv")
+_add_item(CURRICULUM_SITE, "01CURRICULUMMATHS", "01CURRICULUMMATHSY5", "Year 5 maths scheme of work.csv", content=YEAR_5_SCHEME, mime="text/csv")
+_add_item(CURRICULUM_SITE, "01CURRICULUMMATHS", "01CURRICULUMMATHSPOLICY", "Calculation policy.docx", content=b"PK\x03\x04simulated docx", mime=DOCX)
+_add_item(STAFF_SITE, STAFF_SITE["root"]["id"], "01STAFFHANDBOOK", "Staff handbook.txt", content=b"Staff only.\n", mime="text/plain")
+SITES = {entry["site"]["id"].lower(): entry for entry in (CURRICULUM_SITE, STAFF_SITE)}
+
+# What the school's admin has approved, and the app tokens handed out since.
+APP_ACCESS: dict = {}
+APP_TOKENS: set[str] = set()
+
+
+def reset_app_access() -> None:
+    """The default: the admin consented and granted the curriculum site only."""
+    APP_ACCESS.update(consented=True, sites={CURRICULUM_SITE_ID.lower()}, issued=0)
+    APP_TOKENS.clear()
+
+
+def set_admin_consent(granted: bool) -> None:
+    """Withdrawing removes the app's service principal from the tenant.
+    Simulator assumption: tokens already issued stop working at once; in
+    Entra they last until they expire, about an hour."""
+    APP_ACCESS["consented"] = granted
+    if not granted:
+        APP_TOKENS.clear()
+
+
+def set_site_grant(site_id: str, granted: bool) -> None:
+    """A read grant on one site, as an admin makes with POST /sites/{id}/permissions."""
+    (APP_ACCESS["sites"].add if granted else APP_ACCESS["sites"].discard)(site_id.lower())
+
+
+reset_app_access()
+
+
+def _jwt_part(part: str) -> object:
+    try:
+        return json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+    except ValueError:
+        return None
+
+
+def client_credentials_response(form: dict, client_id: str, tenant: str) -> tuple[int, dict]:
+    """The client_credentials grant for NeoMind's app, which signs in with a
+    certificate. Simulator assumption: the assertion's signature isn't checked
+    (there are no keys here); its header must name a certificate (x5t or
+    x5t#S256) and its claims must be right."""
+    if client_id != APP_CLIENT_ID:
+        return 400, entra_error("unauthorized_client", 700016, f"Application with identifier '{client_id}' was not found in the directory '{TENANT_ID}'.")
+    if tenant in ("common", "organizations"):
+        return 400, entra_error("invalid_request", 50059, "No tenant-identifying information found in either the request or implied by any provided credentials.")
+    if form.get("scope", "").strip() != GRAPH_DEFAULT_SCOPE:
+        return 400, entra_error(
+            "invalid_scope",
+            1002012,
+            f"The provided value for scope {form.get('scope', '')} is not valid. Client credential flows must have a scope value "
+            "with /.default suffixed to the resource identifier (application ID URI).",
+        )
+    if form.get("client_secret"):
+        return 401, entra_error("invalid_client", 7000215, "Invalid client secret provided. Ensure the secret being sent in the request is the client secret value, not the client secret ID.")
+    assertion = form.get("client_assertion", "")
+    if form.get("client_assertion_type") != JWT_BEARER or not assertion:
+        return 400, entra_error("invalid_client", 7000218, "The request body must contain the following parameter: 'client_assertion' or 'client_secret'.")
+    parts = assertion.split(".")
+    header, claims = (_jwt_part(parts[0]), _jwt_part(parts[1])) if len(parts) == 3 else (None, None)
+    if not isinstance(header, dict) or not isinstance(claims, dict) or not (header.get("x5t") or header.get("x5t#S256")):
+        return 401, entra_error("invalid_client", 700027, "Client assertion failed signature validation.")
+    if claims.get("iss") != client_id or claims.get("sub") != client_id:
+        return 401, entra_error("invalid_client", 700021, "Client assertion application identifier doesn't match 'client_id' parameter.")
+    if not str(claims.get("aud", "")).endswith("/oauth2/v2.0/token"):
+        # Simulator assumption: Entra's wording for a wrong audience.
+        return 401, entra_error("invalid_client", 700027, "Client assertion audience claim does not match the token endpoint.")
+    if not isinstance(claims.get("exp"), (int, float)) or claims["exp"] < time.time():
+        return 401, entra_error("invalid_client", 700024, "Client assertion is not within its valid time range.")
+    if not APP_ACCESS["consented"]:
+        return 400, entra_error("invalid_client", 7000229, f"The client application {client_id} is missing service principal in the tenant {TENANT_ID}.")
+    APP_ACCESS["issued"] += 1
+    token = f"sim-app-token-neomind-import-{APP_ACCESS['issued']:03d}"
+    APP_TOKENS.add(token)
+    return 200, {"token_type": "Bearer", "expires_in": 3599, "ext_expires_in": 3599, "access_token": token}
+
+
+SITE = r"/sites/(?:(?P<host>[^/:,]+):/sites/(?P<path>[^/:]+):?|(?P<site>[^/:]+))"
+ITEM = r"/drive/(?:root|items/(?P<item>[^/]+))"
+SITE_ROUTES = [
+    (_route(SITE), "site"),
+    (_route(SITE + r"/drive"), "drive"),
+    (_route(SITE + ITEM), "item"),
+    (_route(SITE + ITEM + r"/children"), "children"),
+]
+
+
+def _granted_site(match: re.Match) -> tuple[dict | None, tuple[int, dict] | None]:
+    """The site a route names, or the error the app gets: 404 for no such
+    site, 403 for a site the admin didn't grant."""
+    if match["site"]:
+        entry = SITES.get(match["site"].lower())
+    else:
+        entry = next((e for e in SITES.values() if match["host"].lower() == SHAREPOINT_HOST and e["path"] == match["path"].lower()), None)
+    if entry is None:
+        return None, graph_error(404, "itemNotFound", "Requested site could not be found")
+    if entry["site"]["id"].lower() not in APP_ACCESS["sites"]:
+        return None, graph_error(403, "accessDenied", "Access denied")
+    return entry, None
+
+
+def _download_url(item: dict) -> str:
+    return f"{BASE_URL}/sim-download/{item['id']}"
+
+
+def _with_download(item: dict) -> dict:
+    return {**item, "@microsoft.graph.downloadUrl": _download_url(item)} if "file" in item else item
+
+
+def app_graph_fetch(path: str) -> tuple[int, dict]:
+    """Resolve a Graph v1.0 read path (without the /v1.0 prefix) for NeoMind's
+    app token: the granted site, its library and the files in it. Anything
+    else is beyond Sites.Selected."""
+    parsed = urlparse(path)
+    route_path = unquote(parsed.path).rstrip("/") or "/"
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    if re.fullmatch(r"/me(/.*)?", route_path, re.IGNORECASE):
+        return graph_error(400, "BadRequest", "/me request is only valid with delegated authentication flow.")
+    for pattern, kind in SITE_ROUTES:
+        match = pattern.fullmatch(route_path)
+        if not match:
+            continue
+        entry, error = _granted_site(match)
+        if error:
+            return error
+        site_id = entry["site"]["id"]
+        if kind == "site":
+            status, body = _entity("sites/$entity", entry["site"])
+        elif kind == "drive":
+            status, body = _entity(f"sites('{site_id}')/drive/$entity", entry["drive"])
+        else:
+            item = entry["root"] if match["item"] is None else entry["items"].get(match["item"].lower())
+            if item is None:
+                return graph_error(404, "itemNotFound", "The resource could not be found.")
+            if kind == "item":
+                status, body = _entity(f"sites('{site_id}')/drive/items/$entity", _with_download(item))
+            else:
+                children = [_with_download(entry["items"][child.lower()]) for child in entry["children"].get(item["id"].lower(), [])]
+                status, body = _collection(f"sites('{site_id}')/drive/items('{item['id']}')/children", children)
+        return _apply_query_options(body, query)
+    return graph_error(403, "Authorization_RequestDenied", "Insufficient privileges to complete the operation.")
+
+
+def app_content(path: str) -> tuple[int, dict | str] | None:
+    """For a site's .../drive/items/{id}/content: (302, the pre-authenticated
+    download URL) or a Graph error; None when the path isn't a content read."""
+    match = re.fullmatch(SITE + r"/drive/items/(?P<item>[^/]+)/content", unquote(urlparse(path).path), re.IGNORECASE)
+    if not match:
+        return None
+    entry, error = _granted_site(match)
+    if error:
+        return error
+    item = entry["items"].get(match["item"].lower())
+    if item is None or "file" not in item:
+        return graph_error(404, "itemNotFound", "The resource could not be found.")
+    return 302, _download_url(item)
+
+
+def site_content(item_id: str) -> dict | None:
+    """A site file's bytes, behind its download URL."""
+    for entry in SITES.values():
+        if item_id.lower() in entry["content"]:
+            item = entry["items"][item_id.lower()]
+            return {"contentType": item["file"]["mimeType"], "content": entry["content"][item_id.lower()]}
+    return None
+
+
 # --- Work IQ policy ----------------------------------------------------------
 
 # Microsoft's documented defaults. Tenants can widen the allowed prefixes, so
@@ -1124,7 +1392,7 @@ def token_response(form: dict, client_id: str) -> tuple[int, dict]:
 GRAPH_CONTENT_TYPE = "application/json;odata.metadata=minimal;odata.streaming=true;IEEE754Compatible=false;charset=utf-8"
 CORS_ORIGIN = "http://localhost:3000"  # the Next.js walkthrough's origin
 LOCAL_HOSTNAMES = {"localhost", "127.0.0.1", "::1"}
-ENTRA_PATH = re.compile(r"/(?P<tenant>[^/]+)/(?P<endpoint>v2\.0/\.well-known/openid-configuration|discovery/v2\.0/keys|oauth2/v2\.0/authorize|oauth2/v2\.0/token)")
+ENTRA_PATH = re.compile(r"/(?P<tenant>[^/]+)/(?P<endpoint>v2\.0/\.well-known/openid-configuration|discovery/v2\.0/keys|oauth2/v2\.0/authorize|oauth2/v2\.0/token|adminconsent)")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1211,6 +1479,8 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/mcp":
             self._mcp()
+        elif parsed.path.startswith("/sim-admin/"):
+            self._sim_admin(parsed.path, True)
         elif parsed.path.startswith("/v1.0/"):
             # The simulated user only holds read scopes, so writes fail like
             # they would in Graph for an under-privileged token.
@@ -1221,8 +1491,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": "not_found"})
 
     def do_DELETE(self) -> None:
-        if urlparse(self.path).path == "/mcp":
+        path = urlparse(self.path).path
+        if path == "/mcp":
             self._send(HTTPStatus.METHOD_NOT_ALLOWED, headers={"Allow": "POST"})
+        elif path.startswith("/sim-admin/"):
+            self._sim_admin(path, False)
         else:
             self._send(404, {"error": "not_found"})
 
@@ -1232,6 +1505,9 @@ class Handler(BaseHTTPRequestHandler):
         request_id = self.headers.get("client-request-id") or str(uuid.uuid4())
         headers = {"request-id": request_id, "client-request-id": request_id}
         token = self._bearer()
+        if token in APP_TOKENS:
+            self._app_graph_get(parsed, headers)
+            return
         me = GRAPH_TOKENS.get(token)
         if me is None:
             if token is None:
@@ -1252,7 +1528,20 @@ class Handler(BaseHTTPRequestHandler):
         status, data = graph_fetch(relative + (("?" + parsed.query) if parsed.query else ""), me)
         self._send(status, data, content_type=GRAPH_CONTENT_TYPE, headers=headers)
 
+    def _app_graph_get(self, parsed, headers: dict) -> None:
+        relative = parsed.path[len("/v1.0"):]
+        content = app_content(relative)
+        if content is not None and content[0] == 302:
+            self._redirect(content[1])  # Graph answers /content with a pre-authenticated URL
+            return
+        status, data = content or app_graph_fetch(relative + (("?" + parsed.query) if parsed.query else ""))
+        self._send(status, data, content_type=GRAPH_CONTENT_TYPE, headers=headers)
+
     def _download(self, item_id: str) -> None:
+        site_file = site_content(item_id)
+        if site_file is not None:
+            self._send(200, site_file["content"], content_type=site_file["contentType"])
+            return
         owner = next((user_id for user_id, account in ACCOUNTS.items() if item_id.lower() in account["drive"]), STUDENT_ID)
         blob = drive_content(f"/me/drive/items/{item_id}/content", owner)
         if blob is None:
@@ -1309,6 +1598,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"keys": []})
         elif endpoint.endswith("authorize"):
             self._authorize({key: values[-1] for key, values in parse_qs(parsed.query).items()})
+        elif endpoint == "adminconsent":
+            self._admin_consent({key: values[-1] for key, values in parse_qs(parsed.query).items()})
         else:
             form = {key: values[-1] for key, values in parse_qs(self._body().decode()).items()}
             client_id = form.get("client_id")
@@ -1317,8 +1608,42 @@ class Handler(BaseHTTPRequestHandler):
             if not client_id:
                 self._send(400, entra_error("invalid_request", 900144, "The request body must contain the following parameter: 'client_id'."))
                 return
-            status, body = token_response(form, client_id)
+            if form.get("grant_type") == "client_credentials":
+                status, body = client_credentials_response(form, client_id, tenant)
+            else:
+                status, body = token_response(form, client_id)
             self._send(status, body, headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
+
+    def _sim_admin(self, path: str, granted: bool) -> None:
+        """Simulator-only: what the school's admin does in Entra and SharePoint.
+        POST approves or grants, DELETE withdraws or revokes."""
+        if path == "/sim-admin/consent":
+            set_admin_consent(granted)
+        elif (match := re.fullmatch(r"/sim-admin/sites/(?P<site>[^/]+)/grant", unquote(path))) and match["site"].lower() in SITES:
+            set_site_grant(match["site"], granted)
+        elif path == "/sim-admin/reset" and granted:
+            reset_app_access()
+        else:
+            self._send(404, {"error": "not_found"})
+            return
+        self._send(200, {"consented": APP_ACCESS["consented"], "sites": sorted(APP_ACCESS["sites"])})
+
+    def _admin_consent(self, query: dict) -> None:
+        """The admin consent endpoint: the tenant's admin approves the app for
+        everyone. There's no page here, so the simulator approves at once."""
+        if not query.get("redirect_uri"):
+            self._send(400, entra_error("invalid_request", 900144, "The request body must contain the following parameter: 'redirect_uri'."))
+            return
+        params = {"tenant": TENANT_ID}
+        if query.get("client_id") != APP_CLIENT_ID:
+            params.update(error="unauthorized_client", error_description=f"AADSTS700016: Application with identifier '{query.get('client_id', '')}' was not found in the directory '{TENANT_ID}'.")
+        else:
+            set_admin_consent(True)
+            params["admin_consent"] = "True"
+        if query.get("state") is not None:
+            params["state"] = query["state"]
+        separator = "&" if "?" in query["redirect_uri"] else "?"
+        self._redirect(query["redirect_uri"] + separator + urlencode(params))
 
     def _authorize(self, query: dict) -> None:
         for required in ("client_id", "redirect_uri"):

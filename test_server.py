@@ -396,6 +396,148 @@ class SignInAsTests(ServerCase):
         self.assertTrue(params["error_description"][0].startswith("AADSTS50034"))
 
 
+def _assertion(**overrides):
+    """A client assertion in the shape MSAL builds from a certificate. The
+    simulator doesn't check the signature, so the third part is a stand-in."""
+    def encode(part):
+        return base64.urlsafe_b64encode(json.dumps(part).encode()).rstrip(b"=").decode()
+
+    header = {"alg": "RS256", "typ": "JWT", "x5t": "c2ltLXRodW1icHJpbnQ"}
+    claims = {
+        "aud": f"https://login.microsoftonline.com/{server.TENANT_ID}/oauth2/v2.0/token",
+        "iss": server.APP_CLIENT_ID,
+        "sub": server.APP_CLIENT_ID,
+        "jti": "j-1",
+        "exp": 4102444800,
+        "nbf": 1700000000,
+    }
+    header.update(overrides.pop("header", {}))
+    claims.update(overrides)
+    return f"{encode(header)}.{encode(claims)}.c2lnbmF0dXJl"
+
+
+class SchoolSiteTests(ServerCase):
+    """NeoMind's import signing in as itself and reading the one site it was granted."""
+
+    def setUp(self):
+        server.reset_app_access()
+
+    def app_token(self, tenant=server.TENANT_ID, **form):
+        fields = {
+            "grant_type": "client_credentials",
+            "client_id": server.APP_CLIENT_ID,
+            "scope": server.GRAPH_DEFAULT_SCOPE,
+            "client_assertion_type": server.JWT_BEARER,
+            "client_assertion": _assertion(),
+            **form,
+        }
+        return self.request("POST", f"/{tenant}/oauth2/v2.0/token", urlencode(fields), {"Content-Type": "application/x-www-form-urlencoded"})
+
+    def graph(self, path, token):
+        return self.request("GET", "/v1.0" + path, headers={"Authorization": f"Bearer {token}"})
+
+    def signed_in(self):
+        status, _, body = self.app_token()
+        self.assertEqual(status, 200, body)
+        return body["access_token"]
+
+    def test_a_certificate_gets_an_app_token_without_a_user(self):
+        status, _, body = self.app_token()
+        self.assertEqual(status, 200)
+        self.assertEqual(body["token_type"], "Bearer")
+        self.assertNotIn("refresh_token", body)
+        self.assertNotIn("id_token", body)
+
+    def test_the_sign_in_is_refused_unless_it_is_right(self):
+        cases = [
+            ({"client_id": "someone-else"}, "AADSTS700016"),
+            ({"scope": "Sites.Selected"}, "AADSTS1002012"),
+            ({"client_secret": "s3cret", "client_assertion": ""}, "AADSTS7000215"),
+            ({"client_assertion": ""}, "AADSTS7000218"),
+            ({"client_assertion": _assertion(header={"x5t": None})}, "AADSTS700027"),
+            ({"client_assertion": _assertion(iss="someone-else")}, "AADSTS700021"),
+            ({"client_assertion": _assertion(exp=1000)}, "AADSTS700024"),
+        ]
+        for form, code in cases:
+            with self.subTest(code=code):
+                status, _, body = self.app_token(**form)
+                self.assertIn(status, (400, 401))
+                self.assertTrue(body["error_description"].startswith(code), body["error_description"])
+        _, _, body = self.app_token(tenant="common")
+        self.assertTrue(body["error_description"].startswith("AADSTS50059"))
+
+    def test_the_granted_site_lists_its_files_and_serves_their_content(self):
+        token = self.signed_in()
+        status, _, site = self.graph(f"/sites/{server.SHAREPOINT_HOST}:/sites/curriculum", token)
+        self.assertEqual((status, site["id"]), (200, server.CURRICULUM_SITE_ID))
+        _, _, root = self.graph(f"/sites/{site['id']}/drive/root/children", token)
+        self.assertEqual([item["name"] for item in root["value"]], ["Maths"])
+        _, _, maths = self.graph(f"/sites/{site['id']}/drive/items/{root['value'][0]['id']}/children", token)
+        files = {item["name"]: item for item in maths["value"]}
+        self.assertEqual(set(files), {"Year 4 maths scheme of work.csv", "Year 5 maths scheme of work.csv", "Calculation policy.docx"})
+        year5 = files["Year 5 maths scheme of work.csv"]
+        self.assertEqual((year5["file"]["mimeType"], year5["parentReference"]["path"]), ("text/csv", "/drive/root:/Maths"))
+
+        status, headers, _ = self.graph(f"/sites/{site['id']}/drive/items/{year5['id']}/content", token)
+        self.assertEqual(status, 302)
+        self.assertEqual(headers["Location"], year5["@microsoft.graph.downloadUrl"])
+        status, _, content = self.request("GET", urlparse(headers["Location"]).path)
+        self.assertEqual((status, content), (200, server.YEAR_5_SCHEME))
+        self.assertEqual(year5["size"], len(content))
+
+    def test_a_site_that_was_not_granted_is_refused(self):
+        token = self.signed_in()
+        status, _, body = self.graph(f"/sites/{server.STAFF_SITE_ID}/drive/root/children", token)
+        self.assertEqual((status, body["error"]["code"]), (403, "accessDenied"))
+        status, _, _ = self.graph(f"/sites/{server.SHAREPOINT_HOST}:/sites/staff", token)
+        self.assertEqual(status, 403)
+        status, _, _ = self.graph(f"/sites/{server.STAFF_SITE_ID}/drive/items/01STAFFHANDBOOK/content", token)
+        self.assertEqual(status, 403)
+        status, _, _ = self.graph(f"/sites/{server.SHAREPOINT_HOST}:/sites/nowhere", token)
+        self.assertEqual(status, 404)
+
+    def test_the_app_token_reaches_no_user_data(self):
+        token = self.signed_in()
+        status, _, body = self.graph("/me", token)
+        self.assertEqual((status, body["error"]["code"]), (400, "BadRequest"))
+        status, _, body = self.graph("/education/schools", token)
+        self.assertEqual((status, body["error"]["code"]), (403, "Authorization_RequestDenied"))
+        status, _, _ = self.graph(f"/sites/{server.CURRICULUM_SITE_ID}", server.GRAPH_TOKEN)
+        self.assertEqual(status, 400)  # a student's token has no site routes
+
+    def test_withdrawing_consent_ends_the_tokens_and_further_sign_ins(self):
+        token = self.signed_in()
+        status, _, _ = self.request("DELETE", "/sim-admin/consent")
+        self.assertEqual(status, 200)
+        status, _, body = self.graph(f"/sites/{server.CURRICULUM_SITE_ID}", token)
+        self.assertEqual((status, body["error"]["code"]), (401, "InvalidAuthenticationToken"))
+        status, _, body = self.app_token()
+        self.assertEqual(status, 400)
+        self.assertTrue(body["error_description"].startswith("AADSTS7000229"))
+
+    def test_admin_consent_and_a_site_grant_open_access(self):
+        server.set_admin_consent(False)
+        query = urlencode({"client_id": server.APP_CLIENT_ID, "redirect_uri": "http://localhost:8000/admin/consented", "state": "s"})
+        status, headers, _ = self.request("GET", f"/{server.TENANT_ID}/adminconsent?{query}")
+        self.assertEqual(status, 302)
+        params = parse_qs(urlparse(headers["Location"]).query)
+        self.assertEqual((params["admin_consent"], params["tenant"], params["state"]), (["True"], [server.TENANT_ID], ["s"]))
+        token = self.signed_in()
+
+        self.request("POST", f"/sim-admin/sites/{server.STAFF_SITE_ID}/grant")
+        status, _, _ = self.graph(f"/sites/{server.STAFF_SITE_ID}", token)
+        self.assertEqual(status, 200)
+        self.request("DELETE", f"/sim-admin/sites/{server.CURRICULUM_SITE_ID}/grant")
+        status, _, _ = self.graph(f"/sites/{server.CURRICULUM_SITE_ID}", token)
+        self.assertEqual(status, 403)
+
+    def test_admin_consent_for_an_unknown_app_redirects_with_an_error(self):
+        query = urlencode({"client_id": "nope", "redirect_uri": "http://localhost/cb"})
+        _, headers, _ = self.request("GET", f"/{server.TENANT_ID}/adminconsent?{query}")
+        params = parse_qs(urlparse(headers["Location"]).query)
+        self.assertEqual(params["error"], ["unauthorized_client"])
+
+
 class ConfigTests(unittest.TestCase):
     def base_url(self, **env):
         # BASE_URL is read at import, so check it in a fresh interpreter.
