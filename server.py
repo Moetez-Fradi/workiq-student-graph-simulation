@@ -609,6 +609,40 @@ YEAR_5_SCHEME = (
 ).encode()
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
+# The same school's history: a scheme of work, a knowledge organiser as text
+# and one as a Word document, written by the school (NeoMind's course drafts
+# read them; specs: course sources).
+YEAR_3_HISTORY_SCHEME = "year,term,unit,objective\n3,Autumn 1,Stone Age to Iron Age,\"changes in Britain from the Stone Age to the Iron Age\"\n3,Autumn 1,Stone Age to Iron Age,\"Order the Stone Age, the Bronze Age and the Iron Age on a timeline\"\n3,Autumn 2,Stone Age to Iron Age,\"Explain how farming changed the way people lived\"\n3,Spring 1,The Romans in Britain,\"the Roman Empire and its impact on Britain\"\n3,Spring 2,The Romans in Britain,\"Describe what the Romans built in Britain and why\"\n".encode()
+STONE_AGE_ORGANISER = "Stone Age to Iron Age knowledge organiser\n\nThe Stone Age came first, then the Bronze Age, then the Iron Age. Each age is named after the material people used most for their tools.\n\nIn the early Stone Age people were hunter-gatherers. They moved from place to place, hunting animals and gathering berries, nuts and plants.\n\nAround 6,000 years ago people in Britain began to farm. Farmers grew crops and kept animals, so they stayed in one place and built houses that lasted. Skara Brae in Orkney is a Stone Age village whose stone houses can still be seen.\n\nIn the Bronze Age people learnt to mix copper and tin to make bronze. Bronze tools were stronger than stone ones. Stonehenge was built and changed over many hundreds of years, from the Stone Age into the Bronze Age.\n\nIn the Iron Age people made tools and weapons from iron, which was easier to find than copper and tin. Many people lived in roundhouses, and some lived in hill forts: settlements on hills with banks and ditches around them.\n\nThings children often mix up:\n- The ages did not end on one day. People kept using old tools while new ones spread, so the ages overlap.\n- Stone Age people did not live at the same time as dinosaurs. Dinosaurs died out millions of years before the first humans.\n- Hunter-gatherers were not lost or lazy: moving with the seasons was how they found food.\n- A hill fort was a place where people lived, farmed and traded, not only a castle for fighting.\n".encode()
+ROMANS_ORGANISER = "The Romans in Britain knowledge organiser\n\nThe Roman Empire began in the city of Rome, in what is now Italy. Its army was large and well trained.\n\nJulius Caesar came to Britain twice, in 55 and 54 BC, but did not stay. Almost a hundred years later, in AD 43, the Emperor Claudius sent an army that conquered much of Britain.\n\nNot everyone accepted Roman rule. Boudica, queen of the Iceni tribe, led a revolt against the Romans, but in the end the Romans defeated her army.\n\nThe Romans built straight roads to move soldiers and goods quickly, towns with public baths, and forts. Hadrian's Wall was built across the north of Britain to mark the edge of Roman land and control who crossed it.\n\nThe Romans stayed in Britain for nearly 400 years and left around AD 410. Many things they brought stayed: some roads, town names, coins and the Latin words in English.\n\nThings children often mix up:\n- The Romans were not one people from Britain: they came from an empire across many lands.\n- Hadrian's Wall was not built to keep everyone out forever; it also let the Romans watch and tax people crossing it.\n- The Romans did not leave in one day without a trace: many of their roads and towns stayed in use.\n"
+
+
+def word_document(text: str) -> bytes:
+    """A minimal .docx: one paragraph per line, the same bytes every time."""
+    import io
+    import zipfile
+    from xml.sax.saxutils import escape
+
+    paragraphs = "".join(f"<w:p><w:r><w:t xml:space=\"preserve\">{escape(line)}</w:t></w:r></w:p>" for line in text.splitlines() if line.strip())
+    parts = {
+        "[Content_Types].xml": '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
+        "_rels/.rels": '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>',
+        "word/document.xml": '<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"<w:body>{paragraphs}</w:body></w:document>",
+    }
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, xml in parts.items():
+            info = zipfile.ZipInfo(name, date_time=(2026, 10, 20, 16, 0, 0))
+            archive.writestr(info, xml)
+    return out.getvalue()
+
+
+
 CURRICULUM_SITE_ID = f"{SHAREPOINT_HOST},5e7a9c1b-3d5f-4a7b-9c1d-3e5f7a9b1c2d,1a3c5e7f-9b1d-4f3a-8c5e-7a9b1d3f5a6c"
 STAFF_SITE_ID = f"{SHAREPOINT_HOST},2c4e6a8b-0d2f-4b4d-8f6a-0c2e4a6c8e1f,7b9d1f3a-5c7e-4a9b-8d1f-3b5d7f9a1c4e"
 CURRICULUM_SITE = _site_entry(CURRICULUM_SITE_ID, "curriculum", "Curriculum", "Schemes of work and policies, by subject.")
@@ -617,6 +651,10 @@ _add_item(CURRICULUM_SITE, CURRICULUM_SITE["root"]["id"], "01CURRICULUMMATHS", "
 _add_item(CURRICULUM_SITE, "01CURRICULUMMATHS", "01CURRICULUMMATHSY4", "Year 4 maths scheme of work.csv", content=YEAR_4_SCHEME, mime="text/csv")
 _add_item(CURRICULUM_SITE, "01CURRICULUMMATHS", "01CURRICULUMMATHSY5", "Year 5 maths scheme of work.csv", content=YEAR_5_SCHEME, mime="text/csv")
 _add_item(CURRICULUM_SITE, "01CURRICULUMMATHS", "01CURRICULUMMATHSPOLICY", "Calculation policy.docx", content=b"PK\x03\x04simulated docx", mime=DOCX)
+_add_item(CURRICULUM_SITE, CURRICULUM_SITE["root"]["id"], "01CURRICULUMHISTORY", "History")
+_add_item(CURRICULUM_SITE, "01CURRICULUMHISTORY", "01CURRICULUMHISTORYY3", "Year 3 history scheme of work.csv", content=YEAR_3_HISTORY_SCHEME, mime="text/csv")
+_add_item(CURRICULUM_SITE, "01CURRICULUMHISTORY", "01CURRICULUMHISTORYSTONE", "Stone Age to Iron Age knowledge organiser.txt", content=STONE_AGE_ORGANISER, mime="text/plain")
+_add_item(CURRICULUM_SITE, "01CURRICULUMHISTORY", "01CURRICULUMHISTORYROMANS", "Romans in Britain knowledge organiser.docx", content=word_document(ROMANS_ORGANISER), mime=DOCX)
 _add_item(STAFF_SITE, STAFF_SITE["root"]["id"], "01STAFFHANDBOOK", "Staff handbook.txt", content=b"Staff only.\n", mime="text/plain")
 SITES = {entry["site"]["id"].lower(): entry for entry in (CURRICULUM_SITE, STAFF_SITE)}
 

@@ -471,7 +471,7 @@ class SchoolSiteTests(ServerCase):
         status, _, site = self.graph(f"/sites/{server.SHAREPOINT_HOST}:/sites/curriculum", token)
         self.assertEqual((status, site["id"]), (200, server.CURRICULUM_SITE_ID))
         _, _, root = self.graph(f"/sites/{site['id']}/drive/root/children", token)
-        self.assertEqual([item["name"] for item in root["value"]], ["Maths"])
+        self.assertEqual([item["name"] for item in root["value"]], ["Maths", "History"])
         _, _, maths = self.graph(f"/sites/{site['id']}/drive/items/{root['value'][0]['id']}/children", token)
         files = {item["name"]: item for item in maths["value"]}
         self.assertEqual(set(files), {"Year 4 maths scheme of work.csv", "Year 5 maths scheme of work.csv", "Calculation policy.docx"})
